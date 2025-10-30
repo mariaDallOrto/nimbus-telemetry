@@ -3,23 +3,49 @@
 <head>
     <title>ESP32 Battery Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; text-align: center; padding: 20px; background-color: #f0f2f5; }
         h1, h2 { color: #333; margin-top: 20px; }
         .card-container { display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; }
         .card { background-color: #fff; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 15px 25px; min-width: 150px; }
         .data { font-size: 2.2em; font-weight: 600; margin-top: 5px; }
-        .cell { font-size: 1.8em; } /* Fonte menor para células */
+        .cell { font-size: 1.8em; } 
         h3 { margin-bottom: 5px; color: #555; font-size: 1em; text-transform: uppercase; }
         
-        /* Cores dos Status */
+        .chart-container {
+            width: 90%;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+
+        /* --- NOVOS ESTILOS PARA BOTÕES E STATUS --- */
+        .btn {
+            padding: 10px 20px;
+            font-size: 1em;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background-color 0.2s;
+        }
+        #startButton { background-color: #28a745; color: white; }
+        #stopButton { background-color: #d9534f; color: white; }
+        .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+        #recordStatus { font-size: 1.2em; margin-top: 10px; font-weight: bold; color: #555; }
+        /* ------------------------------------------- */
+
         #status { color: #d9534f; }
         #rssi { color: #0275d8; }
         #lost { color: #f0ad4e; }
         #packetId { color: #aaa; }
         #total_voltage { color: #28a745; }
         #total_cells { color: #17a2b8; }
-        .cell { color: #333; }
     </style>
 </head>
 <body>
@@ -33,13 +59,29 @@
         <div class="card"><h3>Último Pacote (ID)</h3><div id="packetId" class="data">0</div></div>
     </div>
 
+    <h2>Gravação de Dados</h2>
+    <div class="card">
+        <button id="startButton" class="btn">Iniciar Gravação</button>
+        <button id="stopButton" class="btn" disabled>Parar e Baixar CSV</button>
+        <div id="recordStatus">Parado</div>
+    </div>
     <h2>Bateria</h2>
     <div class="card-container">
         <div class="card"><h3>Tensão Total</h3><div id="total_voltage" class="data">0.00 V</div></div>
         <div class="card"><h3>Células Detectadas</h3><div id="total_cells" class="data">0S</div></div>
     </div>
+    
+    <h2>Histórico do Sinal (RSSI)</h2>
+    <div class="chart-container">
+        <canvas id="rssiChart"></canvas>
+    </div>
 
-    <h2>Células Individuais</h2>
+    <h2>Histórico das Células</h2>
+    <div class="chart-container">
+        <canvas id="batteryChart"></canvas>
+    </div>
+
+    <h2>Leitura Instantânea</h2>
     <div class="card-container">
         <div class="card"><h3>Célula 1</h3><div id="c1" class="data cell">0.00 V</div></div>
         <div class="card"><h3>Célula 2</h3><div id="c2" class="data cell">0.00 V</div></div>
@@ -60,6 +102,18 @@
         var websocket;
         var lastPacketId = 0;
         var totalLost = 0;
+        var batteryChart;
+        var rssiChart;    
+        const MAX_DATA_POINTS = 50; 
+
+        // --- NOVAS VARIÁVEIS PARA GRAVAÇÃO ---
+        let isRecording = false;
+        let recordedData = [];
+        // Referências para os novos elementos
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const recordStatus = document.getElementById('recordStatus');
+        // ----------------------------------------
 
         function initWebSocket() {
             console.log('Tentando conectar ao WebSocket...');
@@ -73,16 +127,34 @@
             console.log('Conexão estabelecida.');
             document.getElementById('status').innerHTML = "Conectado";
             document.getElementById('status').style.color = "#5cb85c";
-            lastPacketId = 0; // Reseta a contagem ao conectar
+            lastPacketId = 0; 
+            
+            // Limpa gráficos
+            if(batteryChart) {
+                batteryChart.data.labels = [];
+                batteryChart.data.datasets.forEach((dataset) => { dataset.data = []; });
+                batteryChart.update();
+            }
+            if(rssiChart) {
+                rssiChart.data.labels = [];
+                rssiChart.data.datasets.forEach((dataset) => { dataset.data = []; });
+                rssiChart.update();
+            }
         }
 
         function onClose(event) {
             console.log('Conexão fechada.');
             document.getElementById('status').innerHTML = "Desconectado";
             document.getElementById('status').style.color = "#d9534f";
+            // Para a gravação se a conexão cair
+            if (isRecording) {
+                stopAndDownload(); 
+                alert("Conexão perdida. A gravação foi parada e o CSV foi baixado.");
+            }
             setTimeout(initWebSocket, 2000);
         }
 
+        // --- onMessage ATUALIZADA ---
         function onMessage(event) {
             var data;
             try {
@@ -92,7 +164,16 @@
                 return;
             }
             
-            // --- Atualiza dados de Conexão ---
+            // --- NOVO BLOCO: LÓGICA DE GRAVAÇÃO ---
+            if (isRecording) {
+                // Adiciona um timestamp do navegador (mais útil que só o ID)
+                data.timestamp = new Date().toISOString(); 
+                recordedData.push(data);
+                recordStatus.innerHTML = `Gravando... (${recordedData.length} pontos)`;
+            }
+            // -------------------------------------
+
+            // --- Atualiza dados de Conexão (cards) ---
             document.getElementById('rssi').innerHTML = data.rssi + " dBm";
             document.getElementById('packetId').innerHTML = data.id;
 
@@ -108,20 +189,163 @@
             }
             lastPacketId = data.id;
 
-            // --- Atualiza dados da Bateria ---
+            // --- Atualiza dados da Bateria (cards) ---
             document.getElementById('total_voltage').innerHTML = data.total_voltage.toFixed(2) + " V";
             document.getElementById('total_cells').innerHTML = data.total_cells + "S";
-            
-            // Atualiza todas as 6 células
             document.getElementById('c1').innerHTML = data.c1.toFixed(2) + " V";
             document.getElementById('c2').innerHTML = data.c2.toFixed(2) + " V";
             document.getElementById('c3').innerHTML = data.c3.toFixed(2) + " V";
             document.getElementById('c4').innerHTML = data.c4.toFixed(2) + " V";
             document.getElementById('c5').innerHTML = data.c5.toFixed(2) + " V";
             document.getElementById('c6').innerHTML = data.c6.toFixed(2) + " V";
+            
+            // --- ATUALIZA O GRÁFICO DA BATERIA ---
+            if (batteryChart) {
+                batteryChart.data.labels.push(data.id);
+                batteryChart.data.datasets[0].data.push(data.c1);
+                batteryChart.data.datasets[1].data.push(data.c2);
+                batteryChart.data.datasets[2].data.push(data.c3);
+                batteryChart.data.datasets[3].data.push(data.c4);
+                batteryChart.data.datasets[4].data.push(data.c5);
+                batteryChart.data.datasets[5].data.push(data.c6);
+
+                while (batteryChart.data.labels.length > MAX_DATA_POINTS) {
+                    batteryChart.data.labels.shift();
+                    batteryChart.data.datasets.forEach((dataset) => {
+                        dataset.data.shift();
+                    });
+                }
+                batteryChart.update();
+            }
+
+            // --- ATUALIZA O GRÁFICO DO RSSI ---
+            if (rssiChart) {
+                rssiChart.data.labels.push(data.id);
+                rssiChart.data.datasets[0].data.push(data.rssi);
+                
+                while (rssiChart.data.labels.length > MAX_DATA_POINTS) {
+                    rssiChart.data.labels.shift();
+                    rssiChart.data.datasets[0].data.shift();
+                }
+                rssiChart.update();
+            }
+        }
+        
+        // --- Funções dos Gráficos (sem mudanças) ---
+        function initBatteryChart() {
+            const ctx = document.getElementById('batteryChart').getContext('2d');
+            batteryChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [], datasets: [
+                        { label: 'Célula 1', data: [], borderColor: '#e63946', fill: false, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Célula 2', data: [], borderColor: '#457b9d', fill: false, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Célula 3', data: [], borderColor: '#52b788', fill: false, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Célula 4', data: [], borderColor: '#f4a261', fill: false, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Célula 5', data: [], borderColor: '#9d4edd', fill: false, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Célula 6', data: [], borderColor: '#e56b6f', fill: false, borderWidth: 2, pointRadius: 0 }
+                    ]
+                },
+                options: { responsive: true, animation: false, spanGaps: true, scales: { x: { display: true, title: { display: true, text: 'ID do Pacote (Tempo)' } }, y: { display: true, title: { display: true, text: 'Tensão (V)' }, suggestedMin: 3.0, suggestedMax: 4.5 } } }
+            });
+        }
+        function initRssiChart() {
+            const ctx = document.getElementById('rssiChart').getContext('2d');
+            rssiChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [], datasets: [
+                        { label: 'RSSI', data: [], borderColor: '#0275d8', backgroundColor: 'rgba(2, 117, 216, 0.1)', fill: true, borderWidth: 2, pointRadius: 0 }
+                    ]
+                },
+                options: { responsive: true, animation: false, spanGaps: true, scales: { x: { display: true, title: { display: true, text: 'ID do Pacote (Tempo)' } }, y: { display: true, title: { display: true, text: 'Potência (dBm)' }, suggestedMin: -90, suggestedMax: -30 } } }
+            });
         }
 
-        window.addEventListener('load', initWebSocket);
+        // --- NOVAS FUNÇÕES PARA CONTROLAR A GRAVAÇÃO ---
+
+        function startRecording() {
+            isRecording = true;
+            recordedData = []; // Limpa dados antigos
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            recordStatus.innerHTML = "Gravando... (0 pontos)";
+            recordStatus.style.color = "#d9534f"; // Vermelho
+            console.log("Gravação iniciada.");
+        }
+
+        function stopAndDownload() {
+            isRecording = false;
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            recordStatus.innerHTML = "Parado";
+            recordStatus.style.color = "#555"; // Cor padrão
+            console.log(`Gravação parada. Total de ${recordedData.length} pontos. Gerando CSV...`);
+
+            generateCSV();
+        }
+
+        function generateCSV() {
+            if (recordedData.length === 0) {
+                alert("Nenhum dado foi gravado!");
+                return;
+            }
+
+            // Define os cabeçalhos (ordem das colunas)
+            // Adicionamos o 'timestamp' que criamos
+            const headers = [
+                "timestamp", "id", "rssi", "total_cells", "total_voltage", 
+                "c1", "c2", "c3", "c4", "c5", "c6"
+            ];
+            
+            // Começa o conteúdo do CSV com os cabeçalhos
+            let csvContent = headers.join(",") + "\n";
+
+            // Adiciona cada linha de dado
+            recordedData.forEach(row => {
+                // Mapeia os dados para a ordem correta dos cabeçalhos
+                let csvRow = headers.map(header => row[header]).join(",");
+                csvContent += csvRow + "\n";
+            });
+
+            // --- Lógica para baixar o arquivo ---
+            // 1. Cria um "Blob" (um objeto de arquivo) com o conteúdo
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            
+            // 2. Cria um link <a> invisível
+            const link = document.createElement("a");
+            
+            // 3. Cria uma URL para o nosso Blob
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            
+            // 4. Define o nome do arquivo
+            // Pega a data e hora atual para um nome único
+            const now = new Date();
+            const filename = `esp32_log_${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()}_${now.getHours()}-${now.getMinutes()}-${now.getSeconds()}.csv`;
+            link.setAttribute("download", filename);
+            
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            
+            // 5. Simula um clique no link (inicia o download)
+            link.click();
+            
+            // 6. Remove o link da página
+            document.body.removeChild(link);
+        }
+
+        // --- INICIALIZAÇÃO ---
+        window.addEventListener('load', () => {
+            initBatteryChart(); 
+            initRssiChart();    
+            initWebSocket();
+
+            // --- NOVO: Adiciona os 'clicks' aos botões ---
+            startButton.onclick = startRecording;
+            stopButton.onclick = stopAndDownload;
+            // ---------------------------------------------
+        });
     </script>
 </body>
 </html>
