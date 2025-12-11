@@ -1,0 +1,374 @@
+// =======================================================
+// BIBLIOTECAS
+// =======================================================
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
+#include "time.h"         
+#include "SPI.h"          
+#include "SD.h"           
+#include <Preferences.h>
+
+// =======================================================
+// CONFIGURAÇÃO DA REDE
+// =======================================================
+const char* ssid = "ThundeRatz";
+const char* password = "CapitaoVasco";
+
+// =======================================================
+// CONFIGURAÇÃO DO SD CARD (PINO CS)
+// =======================================================
+const int chipSelect = 5;
+
+// =======================================================
+// CONFIGURAÇÃO DO THROTTLE (R84 RECEIVER)
+// =======================================================
+const int PIN_THROTTLE = 32; // Pino D32
+
+// Variáveis voláteis para a interrupção (ISR)
+volatile unsigned long throttleStartTime = 0;
+volatile uint16_t throttlePulseWidth = 0;
+volatile bool newPulseAvailable = false;
+
+// Função de Interrupção (roda em background sempre que o sinal muda)
+void IRAM_ATTR handleThrottleInterrupt() {
+  if (digitalRead(PIN_THROTTLE) == HIGH) {
+    // Subida do pulso: marca o tempo inicial
+    throttleStartTime = micros();
+  } else {
+    // Descida do pulso: calcula a duração
+    throttlePulseWidth = (uint16_t)(micros() - throttleStartTime);
+    newPulseAvailable = true;
+  }
+}
+
+// =======================================================
+// CONFIGURAÇÃO DO SENSOR DE CORRENTE (HSTS016L/A 200A)
+// =======================================================
+const float SENSITIVITY = 0.010; 
+
+// --- FATORES DE DIVISÃO CALCULADOS ---
+const float FATOR_VOUT = 1.983505; // (9.54k + 9.7k) / 9.7k
+const float FATOR_VREF = 2.003102; // (9.7k + 9.67k) / 9.67k
+
+// =======================================================
+// CONFIGURAÇÃO DE HORA (NTP)
+// =======================================================
+const char* ntpServer = "a.st1.ntp.br"; 
+const long  gmtOffset_sec = -10800; 
+const int   daylightOffset_sec = 0; 
+
+// =======================================================
+// OBJETOS
+// =======================================================
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+Adafruit_ADS1115 ads1; // 0x48 -> Células 1-4
+Adafruit_ADS1115 ads2; // 0x49 -> Células 5-6 + Corrente
+Preferences preferences;
+
+// =======================================================
+// CALIBRAÇÃO DE TENSÃO (BATERIA)
+// =======================================================
+const float MULT_1S = 0.000175;
+const float MULT_2S = 0.000350;
+const float MULT_3S = 0.000525;
+const float MULT_4S = 0.000700;
+const float MULT_5S = 0.000875;
+const float MULT_6S = 0.001050;
+const float ADS_MULTIPLIER_GAIN_ONE = 0.000125;
+
+// =======================================================
+// VARIÁVEIS GLOBAIS
+// =======================================================
+unsigned long packetCounter = 0; 
+unsigned long lastTime = 0;
+unsigned long lastFlushTime = 0;
+const long interval = 500;
+const long flushInterval = 5000;
+
+bool isRecording = false;
+File dataFile;
+String currentLogFile;
+int writeCounter = 0;
+
+// =======================================================
+// FUNÇÃO: OBTER TIMESTAMP
+// =======================================================
+String getTimestamp() {
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    return "1970-01-01T00_00_00"; 
+  }
+  char timeString[20];
+  strftime(timeString, sizeof(timeString), "%Y-%m-%dT%H_%M_%S", &timeinfo);
+  return String(timeString);
+}
+
+// =======================================================
+// FUNÇÃO: FLUSH PERIÓDICO DO SD CARD
+// =======================================================
+void flushSDCard() {
+  if (!isRecording || !dataFile) return;
+  unsigned long now = millis();
+  if ((now - lastFlushTime > flushInterval) || (writeCounter >= 10)) {
+    dataFile.flush();
+    lastFlushTime = now;
+    writeCounter = 0;
+    Serial.println("[SD] Dados sincronizados (flush)");
+  }
+}
+
+// =======================================================
+// FUNÇÕES: CONTROLE DE GRAVAÇÃO SD
+// =======================================================
+void startSDRecording() {
+  if (isRecording) { Serial.println("[SD] Já gravando!"); return; }
+  currentLogFile = "/log_" + getTimestamp() + ".csv";
+  dataFile = SD.open(currentLogFile, FILE_WRITE);
+  
+  if (!dataFile) {
+    Serial.println("[SD] ERRO ao abrir arquivo!");
+    ws.textAll("{\"status\":\"REC_ERROR\", \"msg\":\"Falha SD\"}");
+    return;
+  }
+
+  // HEADER ATUALIZADO COM THROTTLE
+  dataFile.println("timestamp,id,rssi,throttle,current,total_cells,total_voltage,c1,c2,c3,c4,c5,c6");
+  dataFile.flush(); 
+  
+  preferences.begin("datalogger", false);
+  preferences.putBool("isRecording", true);
+  preferences.putString("logFile", currentLogFile);
+  preferences.end();
+
+  isRecording = true;
+  writeCounter = 0;
+  lastFlushTime = millis();
+  
+  Serial.println("[SD] Iniciado: " + currentLogFile);
+  ws.textAll("{\"status\":\"REC_STARTED\", \"file\":\"" + currentLogFile + "\"}");
+}
+
+void stopSDRecording() {
+  if (!isRecording) { return; }
+  if (dataFile) { dataFile.flush(); dataFile.close(); }
+  
+  preferences.begin("datalogger", false);
+  preferences.putBool("isRecording", false);
+  preferences.putString("logFile", "");
+  preferences.end();
+
+  isRecording = false;
+  Serial.println("[SD] Parado.");
+  ws.textAll("{\"status\":\"REC_STOPPED\", \"file\":\"" + currentLogFile + "\"}");
+}
+
+// =======================================================
+// FUNÇÃO: EVENTOS WEBSOCKET
+// =======================================================
+void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+             void *arg, uint8_t *data, size_t len) {
+    switch (type) {
+        case WS_EVT_CONNECT:
+            if (isRecording) client->text("{\"status\":\"REC_STARTED\", \"file\":\"" + currentLogFile + "\"}");
+            break;
+        case WS_EVT_DATA: {
+            AwsFrameInfo *info = (AwsFrameInfo*)arg;
+            if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+              String msg = "";
+              for (size_t i = 0; i < len; i++) msg += (char)data[i];
+              if (msg == "START_RECORD") startSDRecording();
+              else if (msg == "STOP_RECORD") stopSDRecording();
+            }
+            break;
+        }
+        default: break;
+    }
+}
+
+// =======================================================
+// FUNÇÃO PRINCIPAL DE LEITURA
+// =======================================================
+void readSensorsAndSend() {
+    
+    // --- 1. LEITURA THROTTLE (Interrupção) ---
+    // Copia valor da variável volátil com segurança
+    noInterrupts();
+    uint16_t pulse = throttlePulseWidth;
+    bool available = newPulseAvailable;
+    newPulseAvailable = false; // Reset flag
+    interrupts();
+
+    int throttlePercent = 0;
+    
+    // Filtro de validade (Pulso RC normal é entre 900us e 2100us)
+    if (pulse > 800 && pulse < 2200) {
+      // Mapeia 1000us -> 0% e 2000us -> 100%
+      long mapped = map(pulse, 1000, 2000, 0, 100);
+      throttlePercent = constrain(mapped, 0, 100);
+    } else {
+      // Se o pulso for inválido ou desligado, assume 0
+      throttlePercent = 0;
+    }
+
+    // --- 2. LEITURA DAS TENSÕES ---
+    int16_t raw[6];
+    float tensoes_totais[6];  
+    float tensoes_celulas[6]; 
+    
+    raw[0] = ads1.readADC_SingleEnded(0); tensoes_totais[0] = (float)raw[0] * MULT_1S;
+    raw[1] = ads1.readADC_SingleEnded(1); tensoes_totais[1] = (float)raw[1] * MULT_2S;
+    raw[2] = ads1.readADC_SingleEnded(2); tensoes_totais[2] = (float)raw[2] * MULT_3S;
+    raw[3] = ads1.readADC_SingleEnded(3); tensoes_totais[3] = (float)raw[3] * MULT_4S;
+    raw[4] = ads2.readADC_SingleEnded(0); tensoes_totais[4] = (float)raw[4] * MULT_5S;
+    raw[5] = ads2.readADC_SingleEnded(1); tensoes_totais[5] = (float)raw[5] * MULT_6S;
+
+    // --- 3. LEITURA DE CORRENTE PRECISA ---
+    int16_t raw_vout = ads2.readADC_SingleEnded(2); // A2 (Amarelo)
+    int16_t raw_vref = ads2.readADC_SingleEnded(3); // A3 (Branco)
+    
+    float v_pin_a2 = (float)raw_vout * ADS_MULTIPLIER_GAIN_ONE;
+    float v_pin_a3 = (float)raw_vref * ADS_MULTIPLIER_GAIN_ONE;
+    
+    float real_vout = v_pin_a2 * FATOR_VOUT;
+    float real_vref = v_pin_a3 * FATOR_VREF;
+    
+    float currentAmps = (real_vout - real_vref) / SENSITIVITY;
+    if (abs(currentAmps) < 0.3) currentAmps = 0.0;
+
+    // --- 4. CÁLCULO DAS CÉLULAS ---
+    tensoes_celulas[0] = tensoes_totais[0];
+    tensoes_celulas[1] = tensoes_totais[1] - tensoes_totais[0];
+    tensoes_celulas[2] = tensoes_totais[2] - tensoes_totais[1];
+    tensoes_celulas[3] = tensoes_totais[3] - tensoes_totais[2];
+    tensoes_celulas[4] = tensoes_totais[4] - tensoes_totais[3];
+    tensoes_celulas[5] = tensoes_totais[5] - tensoes_totais[4];
+
+    // --- 5. DETECÇÃO DE BATERIA ---
+    float tensao_total_bateria = 0.0;
+    int celulas_detectadas = 0;
+    for (int i = 5; i >= 0; i--) { 
+        if (tensoes_totais[i] > 2.5) { 
+            tensao_total_bateria = tensoes_totais[i];
+            celulas_detectadas = i + 1;
+            break; 
+        }
+    }
+
+    // --- 6. ENVIO DE DADOS ---
+    packetCounter++;
+    long currentRssi = WiFi.RSSI();
+    String currentTimestamp = getTimestamp();
+
+    // JSON
+    String jsonString = "{";
+    jsonString += "\"id\":" + String(packetCounter);
+    jsonString += ", \"rssi\":" + String(currentRssi);
+    jsonString += ", \"throttle\":" + String(throttlePercent); // Novo campo
+    jsonString += ", \"current\":" + String(currentAmps, 2);
+    jsonString += ", \"total_cells\":" + String(celulas_detectadas);
+    jsonString += ", \"total_voltage\":" + String(tensao_total_bateria, 2);
+    
+    for (int i = 0; i < 6; i++) {
+        float val = (tensoes_celulas[i] < 0) ? 0.0 : tensoes_celulas[i];
+        jsonString += ", \"c" + String(i + 1) + "\":" + String(val, 2);
+    }
+    jsonString += "}";
+    ws.textAll(jsonString);
+
+    // SD CARD
+    if (isRecording && dataFile) {
+      String dataString = currentTimestamp + ",";
+      dataString += String(packetCounter) + ",";
+      dataString += String(currentRssi) + ",";
+      dataString += String(throttlePercent) + ","; // Nova coluna
+      dataString += String(currentAmps, 2) + ",";
+      dataString += String(celulas_detectadas) + ",";
+      dataString += String(tensao_total_bateria, 2) + ",";
+      
+      for (int i = 0; i < 6; i++) {
+        float val = (tensoes_celulas[i] < 0) ? 0.0 : tensoes_celulas[i];
+        dataString += String(val, 2);
+        if (i < 5) dataString += ",";
+      }
+      
+      dataFile.println(dataString);
+      writeCounter++;
+      flushSDCard();
+    }
+}
+
+void handleDownload(AsyncWebServerRequest *request) {
+  if (request->hasParam("file")) {
+    String filename = request->getParam("file")->value();
+    if (SD.exists(filename)) {
+      File downloadFile = SD.open(filename, "r");
+      request->send(downloadFile, filename, "text/csv");
+      return;
+    }
+  }
+  request->send(404, "text/plain", "Arquivo nao encontrado");
+}
+
+// =======================================================
+// SETUP
+// =======================================================
+void setup() {
+    Serial.begin(115200);
+    delay(300); 
+    
+    Serial.println("\n--- ESP32 Monitor Completo ---");
+    
+    // 1. SETUP THROTTLE (INTERRUPÇÃO)
+    pinMode(PIN_THROTTLE, INPUT);
+    // Configura interrupção para disparar em qualquer mudança de estado (HIGH/LOW)
+    attachInterrupt(digitalPinToInterrupt(PIN_THROTTLE), handleThrottleInterrupt, CHANGE);
+    
+    // 2. I2C e ADS
+    Wire.begin(21, 22);
+    if (!ads1.begin(0x48)) { Serial.println("ERRO ADS1"); while(1); }
+    ads1.setGain(GAIN_ONE);
+    if (!ads2.begin(0x49)) { Serial.println("ERRO ADS2"); while(1); }
+    ads2.setGain(GAIN_ONE);
+
+    // 3. SD CARD
+    SPI.begin(18, 19, 23); 
+    if (!SD.begin(chipSelect)) { Serial.println("ERRO SD"); while(1); }
+    
+    // 4. WIFI e NTP
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { delay(500); }
+    Serial.println("WiFi Conectado!");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); 
+
+    // 5. RECUPERAÇÃO E WEB
+    preferences.begin("datalogger", true);
+    isRecording = preferences.getBool("isRecording", false);
+    if (isRecording) {
+        currentLogFile = preferences.getString("logFile", "");
+        if (currentLogFile != "" && SD.exists(currentLogFile)) {
+             dataFile = SD.open(currentLogFile, FILE_WRITE);
+             if(dataFile) dataFile.println("# REBOOT");
+        } else isRecording = false;
+    }
+    preferences.end();
+
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    ws.onEvent(onEvent);
+    server.addHandler(&ws);
+    server.on("/download", HTTP_GET, handleDownload);
+    server.begin();
+    Serial.println("Sistema Iniciado.");
+}
+
+void loop() {
+    unsigned long now = millis();
+    if (now - lastTime > interval) {
+        lastTime = now;
+        readSensorsAndSend();
+    }
+    ws.cleanupClients();
+}
