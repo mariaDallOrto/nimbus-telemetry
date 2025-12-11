@@ -24,3 +24,5 @@ ESP32 3.3V -> VDD do Módulo 1 E VDD do Módulo 2
 ESP32 GND -> GND do Módulo 1 E GND do Módulo 2
 ESP32 D22 (SCL) -> SCL do Módulo 1 E SCL do Módulo 2
 ESP32 D21 (SDA) -> SDA do Módulo 1 E SDA do Módulo 2
+
+Para o sensor de corrente deve ser usado um divisor de corrente.
