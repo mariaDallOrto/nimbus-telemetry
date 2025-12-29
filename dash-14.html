@@ -228,12 +228,13 @@
                 if(data['c'+i] !== undefined) document.getElementById('c'+i).innerText = data['c'+i].toFixed(2);
             }
 
+            // ATUALIZA O GRÁFICO (COM CORRENTE)
             if(comboChart) {
                 let timeStr = new Date().toLocaleTimeString('pt-BR');
                 comboChart.data.labels.push(timeStr);
-                comboChart.data.datasets[0].data.push(data.pwmVal);
-                comboChart.data.datasets[1].data.push(data.vTotal);
-                comboChart.data.datasets[2].data.push(rpm_calc);
+                comboChart.data.datasets[0].data.push(data.pwmVal);  // Stick
+                comboChart.data.datasets[1].data.push(data.current); // <--- AGORA PLOTA CORRENTE
+                comboChart.data.datasets[2].data.push(rpm_calc);     // RPM
                 if(comboChart.data.labels.length > MAX_POINTS) {
                     comboChart.data.labels.shift();
                     comboChart.data.datasets.forEach(d => d.data.shift());
@@ -248,20 +249,23 @@
         window.open(`http://${document.getElementById('espIp').value}/download?file=${lastFile}`, '_blank');
     }
 
+    // --- CONFIGURAÇÃO DO GRÁFICO LIVE (COM CORRENTE) ---
     window.onload = function() {
         var ctx = document.getElementById('comboChart').getContext('2d');
         comboChart = new Chart(ctx, {
             type: 'line',
             data: { labels: [], datasets: [
                 { label: 'Stick (%)', borderColor: '#8e44ad', backgroundColor: 'rgba(142,68,173,0.1)', data: [], yAxisID: 'yStick', fill: true, pointRadius: 0 },
-                { label: 'Tensão (V)', borderColor: '#27ae60', data: [], yAxisID: 'yVolts', pointRadius: 0, borderWidth: 2 },
+                // --- MUDANÇA AQUI: Tensão -> Corrente ---
+                { label: 'Corrente (A)', borderColor: '#c0392b', data: [], yAxisID: 'yCurrent', pointRadius: 0, borderWidth: 2 },
                 { label: 'RPM', borderColor: '#e67e22', data: [], yAxisID: 'yRPM', pointRadius: 0, borderDash: [5, 5] }
             ]},
             options: { responsive: true, maintainAspectRatio: false, animation: false,
                 scales: {
                     x: { ticks: { maxTicksLimit: 10 } },
                     yStick: { type: 'linear', display: true, position: 'left', min: -100, max: 100 },
-                    yVolts: { type: 'linear', display: true, position: 'right', grid: {drawOnChartArea: false} },
+                    // --- MUDANÇA AQUI: Eixo yCurrent ---
+                    yCurrent: { type: 'linear', display: true, position: 'right', grid: {drawOnChartArea: false} },
                     yRPM: { type: 'linear', display: true, position: 'right', grid: {drawOnChartArea: false} }
                 }
             }
@@ -308,7 +312,6 @@
             if (row.length === headers.length) {
                 let rowObj = {};
                 headers.forEach((h, index) => {
-                    // --- CORREÇÃO AQUI ---
                     // Se for Timestamp, mantém como Texto. Se não, tenta virar número.
                     if (h === 'Timestamp' || h.toLowerCase().includes('time')) {
                         rowObj[h] = row[index];
