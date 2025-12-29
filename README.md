@@ -1,6 +1,6 @@
 # 📡 ESP32 RC Telemetry & Data Logger
 
-Este projeto consiste em um sistema completo de telemetria para robôs de combate, focado em monitoramento de baterias LiPo (até 6S), consumo de corrente e sinais de receptor (PWM). O sistema é composto por um firmware para **ESP32** e um **Dashboard Web** para visualização em tempo real e análise de dados.
+Este projeto consiste em um sistema não invasivo de telemetria para robôs de combate, focado em monitoramento de baterias LiPo (até 6S), consumo de corrente e sinais de receptor (PWM). O sistema é composto por um firmware para **ESP32** e um **Dashboard Web** para visualização em tempo real e análise de dados.
 
 ## 📋 Funcionalidades
 
