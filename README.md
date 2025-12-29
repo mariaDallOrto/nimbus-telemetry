@@ -108,3 +108,5 @@ const char* password = "SUA_SENHA";
 4. **Análise:** Vá para a aba "Análise de Arquivo", faça o upload do `.csv` baixado e visualize gráficos detalhados de todo o percurso/voo.
 
 ---
+
+### 1,2,3... K-Torze!
