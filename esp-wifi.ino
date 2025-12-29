@@ -18,8 +18,8 @@
 // =======================================================
 // CONFIGURAÇÃO DA REDE E HORA
 // =======================================================
-const char* ssid = "Mimizinho-2G";        // <--- SEU WIFI
-const char* password = "Meninao0506!";  // <--- SUA SENHA
+const char* ssid = "K-Torze";        // <--- SEU WIFI
+const char* password = "14141414";  // <--- SUA SENHA
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = -10800; // GMT-3
