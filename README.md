@@ -105,7 +105,7 @@ const char* password = "SUA_SENHA";
 1. **Monitoramento:** A aba "Monitoramento ao Vivo" mostra os dados em tempo real.
 2. **Gravação:** Clique em "INICIAR" para começar a gravar os dados no cartão SD. O LED virtual piscará indicando a gravação.
 3. **Download:** Ao parar a gravação, o botão "BAIXAR CSV" aparecerá se o arquivo foi gerado com sucesso.
-4. **Análise:** Vá para a aba "Análise de Arquivo", faça o upload do `.csv` baixado e visualize gráficos detalhados de todo o percurso/voo.
+4. **Análise:** Vá para a aba "Análise de Arquivo", faça o upload do `.csv` baixado e visualize gráficos detalhados de todo o log. Esta parte opera de forma independente, não precisando estar comectado a ESP32.
 
 ---
 
