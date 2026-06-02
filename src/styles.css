@@ -1236,6 +1236,68 @@ button {
   font-family: var(--font-mono);
 }
 
+/* ─── EXAMPLE LOGS ─── */
+.nt-examples {
+  margin-top: 20px;
+}
+.nt-examples__title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-soft);
+  margin-bottom: 12px;
+}
+.nt-examples__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.nt-example {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    background-color var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+}
+.nt-example:hover:not(:disabled) {
+  border-color: var(--color-brand);
+  background: color-mix(in oklab, var(--color-brand) 5%, var(--color-surface));
+  transform: translateY(-1px);
+}
+.nt-example:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+.nt-example:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.nt-example__name {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.nt-example__desc {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text-soft);
+}
+.nt-example__cta {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-brand);
+}
+
 /* ─── COLUMN TOGGLES ─── */
 .nt-toggle-grid {
   display: flex;

@@ -34,6 +34,30 @@ const RPM_SOURCE_COLUMNS = ["TensaoTotal_V", "Comando_Pct", "Corrente_A"];
 const DEFAULT_SELECTED = ["Corrente_A", "TensaoTotal_V", "Comando_Pct", "RSSI_dBm", RPM_COLUMN];
 const EXCLUDED_COLUMNS = new Set(["Timestamp", "PacketID"]);
 
+/** Sample logs bundled in /public/examples for quick exploration. */
+const EXAMPLE_LOGS = [
+  {
+    file: "pico.csv",
+    name: "Pico",
+    description: "Teste para validar o pico de corrente da arma.",
+  },
+  {
+    file: "pico_balta_luta.csv",
+    name: "Pico Balta (luta)",
+    description: "Pico do jeito que o Balta acelera a arma em luta.",
+  },
+  {
+    file: "pico_balta_luta2.csv",
+    name: "Pico Balta (luta) · 2",
+    description: "Segunda captura do pico com o Balta acelerando em luta.",
+  },
+  {
+    file: "test_paje.csv",
+    name: "Teste Pajé",
+    description: "Teste de demonstração gravado para mostrar ao Pajé.",
+  },
+] as const;
+
 const COLUMN_COLORS: Record<string, string> = {
   Corrente_A: CHART_COLOR_CURRENT,
   TensaoTotal_V: CHART_COLOR_VOLTAGE,
@@ -72,6 +96,7 @@ export default function AnalysisPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [maByColumn, setMaByColumn] = useState<Record<string, number>>({});
   const [independentScales, setIndependentScales] = useState(true);
+  const [loadingExample, setLoadingExample] = useState<string | null>(null);
 
   // Estimated RPM per row, recomputed whenever the motor params change. When
   // the source columns are present we expose RPM_Est as a virtual column that
@@ -144,6 +169,20 @@ export default function AnalysisPage() {
   };
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => readFile(event.target.files?.[0]);
+
+  const loadExample = async (example: (typeof EXAMPLE_LOGS)[number]) => {
+    setError(null);
+    setLoadingExample(example.file);
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}examples/${example.file}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      loadCsvText(example.name, await response.text());
+    } catch {
+      setError(`Não foi possível carregar o exemplo "${example.name}".`);
+    } finally {
+      setLoadingExample(null);
+    }
+  };
 
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault();
@@ -243,6 +282,28 @@ export default function AnalysisPage() {
                 Arraste o arquivo baixado do ESP32 aqui, ou clique para selecionar.
               </span>
             </label>
+
+            <div className="nt-examples">
+              <div className="nt-examples__title">Ou comece com um exemplo</div>
+              <div className="nt-examples__grid">
+                {EXAMPLE_LOGS.map((example) => (
+                  <button
+                    key={example.file}
+                    type="button"
+                    className="nt-example"
+                    disabled={loadingExample !== null}
+                    aria-busy={loadingExample === example.file}
+                    onClick={() => loadExample(example)}
+                  >
+                    <span className="nt-example__name">{example.name}</span>
+                    <span className="nt-example__desc">{example.description}</span>
+                    <span className="nt-example__cta" aria-hidden>
+                      {loadingExample === example.file ? "Carregando…" : "Abrir exemplo →"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </>
         )}
 
