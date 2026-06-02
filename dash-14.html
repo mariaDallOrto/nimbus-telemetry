@@ -48,7 +48,16 @@
 
         /* --- ESTILOS DA ABA DE ANÁLISE --- */
         .upload-area { border: 2px dashed #bdc3c7; padding: 30px; background: #fff; border-radius: 10px; margin-bottom: 20px; }
-        .checkbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 15px; text-align: left; }
+        .checkbox-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 15px; text-align: left; }
+        .ma-live-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 18px; background: #fff; padding: 12px; border-radius: 8px; margin: 12px auto 0; max-width: 1200px; width: 98%; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .ma-live-bar label { font-size: 0.85em; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+        .ma-live-bar input { width: 60px; padding: 5px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-weight: bold; color: #2c3e50; }
+        .ma-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; text-align: left; }
+        .ma-row { background: #fff; border: 1px solid #e4e7ea; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+        .ma-row .ma-name { font-size: 0.82em; color: #34495e; font-weight: 700; }
+        .ma-input-wrap { display: flex; align-items: center; gap: 10px; }
+        .ma-input-wrap input[type=range] { flex: 1; accent-color: #3498db; cursor: pointer; }
+        .ma-input-wrap .ma-num { width: 56px; padding: 6px; border: 1px solid #ddd; border-radius: 6px; text-align: center; font-weight: bold; color: #2c3e50; }
         .grid-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 15px; margin-top: 20px; }
         .mini-chart { background: #fff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); height: 250px; }
         
@@ -83,6 +92,14 @@
         </div>
 
         <div class="chart-wrapper"><canvas id="comboChart"></canvas></div>
+
+        <div class="ma-live-bar">
+            <span style="font-weight:bold; color:#7f8c8d;">Média móvel (pontos):</span>
+            <label style="color:#8e44ad">Stick <input type="number" id="ma_live_0" value="1" min="1" max="500" onchange="renderComboChart()"></label>
+            <label style="color:#c0392b">Corrente <input type="number" id="ma_live_1" value="1" min="1" max="500" onchange="renderComboChart()"></label>
+            <label style="color:#e67e22">RPM <input type="number" id="ma_live_2" value="1" min="1" max="500" onchange="renderComboChart()"></label>
+            <label style="color:#2c3e50; border-left:1px solid #ddd; padding-left:18px;">Janela visível (pontos) <input type="number" id="live_window" value="80" min="10" max="2000" onchange="setLiveWindow()"></label>
+        </div>
 
         <div class="ctrl-panel">
             <div class="ctrl-card">
@@ -127,6 +144,10 @@
                 <canvas id="customAnalysisChart"></canvas>
             </div>
 
+            <h3 style="color:#34495e; margin-top:30px;">Média Móvel por Linha</h3>
+            <p style="font-size:0.8em; color:#7f8c8d; margin-top:0;">Janela em pontos (1 = sem suavização)</p>
+            <div class="ma-grid" id="ma-container"></div>
+
             <h3 style="color:#34495e; margin-top:40px;">Visão Geral dos Sensores</h3>
             <div class="grid-charts">
                 <div class="mini-chart"><h4>Corrente (A)</h4><canvas id="chartCurrent"></canvas></div>
@@ -159,7 +180,9 @@
     // =========================================================
     var websocket;
     var comboChart;
-    const MAX_POINTS = 80;
+    var liveRaw = [[], [], []]; // valores crus por linha: Stick, Corrente, RPM
+    var axisBounds = { yCurrent: null, yRPM: null }; // limites travados (anti-tremor)
+    var maxPoints = 80;
     var lastFile = "";
     var reconnectTimer;
 
@@ -221,9 +244,7 @@
             let rpm_calc = Math.round(((data.vTotal * duty) - (data.current * R)) * kv);
 
             document.getElementById('total_voltage').innerText = data.vTotal.toFixed(2) + " V";
-            document.getElementById('current_amps').innerText = data.current.toFixed(1) + " A";
-            document.getElementById('r84_val').innerText = data.pwmVal + " %";
-            document.getElementById('rpm_val').innerText = Math.abs(rpm_calc);
+            // Stick, Corrente e RPM: os cards refletem a média móvel (ver renderComboChart)
             for(let i=1; i<=6; i++) {
                 if(data['c'+i] !== undefined) document.getElementById('c'+i).innerText = data['c'+i].toFixed(2);
             }
@@ -232,17 +253,84 @@
             if(comboChart) {
                 let timeStr = new Date().toLocaleTimeString('pt-BR');
                 comboChart.data.labels.push(timeStr);
-                comboChart.data.datasets[0].data.push(data.pwmVal);  // Stick
-                comboChart.data.datasets[1].data.push(data.current); // <--- AGORA PLOTA CORRENTE
-                comboChart.data.datasets[2].data.push(rpm_calc);     // RPM
-                if(comboChart.data.labels.length > MAX_POINTS) {
+                liveRaw[0].push(data.pwmVal);  // Stick
+                liveRaw[1].push(data.current); // Corrente
+                liveRaw[2].push(rpm_calc);     // RPM
+                while(comboChart.data.labels.length > maxPoints) {
                     comboChart.data.labels.shift();
-                    comboChart.data.datasets.forEach(d => d.data.shift());
+                    liveRaw.forEach(buf => buf.shift());
                 }
-                comboChart.update();
+                renderComboChart();
             }
         };
     }
+    function setLiveWindow() {
+        const input = document.getElementById('live_window');
+        maxPoints = Math.max(2, parseInt(input.value, 10) || 80);
+        while(comboChart && comboChart.data.labels.length > maxPoints) {
+            comboChart.data.labels.shift();
+            liveRaw.forEach(buf => buf.shift());
+        }
+        renderComboChart();
+    }
+
+    function niceStep(raw) {
+        if(raw <= 0) return 1;
+        const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+        const norm = raw / pow;
+        const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+        return nice * pow;
+    }
+
+    function niceBounds(values) {
+        const nums = values.filter(v => typeof v === 'number' && !isNaN(v));
+        if(!nums.length) return null;
+        let lo = Math.min(...nums), hi = Math.max(...nums);
+        if(lo === hi) { lo -= 1; hi += 1; }
+        const pad = (hi - lo) * 0.1;
+        lo -= pad; hi += pad;
+        const step = niceStep((hi - lo) / 5);
+        return { min: Math.floor(lo / step) * step, max: Math.ceil(hi / step) * step, step };
+    }
+
+    // Trava o eixo em limites redondos: cresce na hora, encolhe só com folga (histerese)
+    function stickyAxis(key, values) {
+        const target = niceBounds(values);
+        if(!target) return;
+        const current = axisBounds[key];
+        if(!current) { axisBounds[key] = target; return; }
+        let { min, max } = current;
+        if(target.min < min) min = target.min;
+        if(target.max > max) max = target.max;
+        if(target.min > min + target.step) min = target.min;
+        if(target.max < max - target.step) max = target.max;
+        axisBounds[key] = { min, max, step: target.step };
+    }
+
+    function renderComboChart() {
+        if(!comboChart) return;
+        const lastSmooth = [];
+        for(let i = 0; i < 3; i++) {
+            const input = document.getElementById('ma_live_' + i);
+            const window = input ? Math.max(1, parseInt(input.value, 10) || 1) : 1;
+            const series = movingAverage(liveRaw[i], window);
+            comboChart.data.datasets[i].data = series;
+            lastSmooth[i] = series.length ? series[series.length - 1] : null;
+        }
+        if(lastSmooth[0] !== null) document.getElementById('r84_val').innerText = Math.round(lastSmooth[0]) + " %";
+        if(lastSmooth[1] !== null) document.getElementById('current_amps').innerText = lastSmooth[1].toFixed(1) + " A";
+        if(lastSmooth[2] !== null) document.getElementById('rpm_val').innerText = Math.abs(Math.round(lastSmooth[2]));
+        stickyAxis('yCurrent', comboChart.data.datasets[1].data);
+        stickyAxis('yRPM', comboChart.data.datasets[2].data);
+        ['yCurrent', 'yRPM'].forEach(key => {
+            if(axisBounds[key]) {
+                comboChart.options.scales[key].min = axisBounds[key].min;
+                comboChart.options.scales[key].max = axisBounds[key].max;
+            }
+        });
+        comboChart.update();
+    }
+
     function sendCmd(cmd) { if(websocket && websocket.readyState === WebSocket.OPEN) websocket.send(cmd); }
     function downloadLastFile() {
         if(!lastFile || lastFile === "ERRO_SD") return;
@@ -328,6 +416,7 @@
 
         document.getElementById('analysis-content').style.display = 'block';
         generateCheckboxes(headers);
+        generateMaControls(headers);
         generateTable();
         updateCustomChart();
         generateMiniCharts();
@@ -347,10 +436,43 @@
         });
     }
 
-    function updateCustomChart() {
-        const ctx = document.getElementById('customAnalysisChart').getContext('2d');
-        if (customChartInstance) customChartInstance.destroy();
+    function generateMaControls(headers) {
+        const container = document.getElementById('ma-container');
+        container.innerHTML = '';
+        headers.forEach(h => {
+            if (h === 'Timestamp' || h === 'PacketID') return;
+            const row = document.createElement('div');
+            row.className = 'ma-row';
+            row.innerHTML = `<span class="ma-name">${h}</span>
+                <div class="ma-input-wrap">
+                    <input type="range" id="ma_range_${h}" min="1" max="50" value="1" oninput="syncMa('${h}', this.value)">
+                    <input type="number" class="ma-num" id="ma_${h}" min="1" max="200" value="1" oninput="syncMa('${h}', this.value)" title="Janela da média móvel (1 = sem suavização)">
+                </div>`;
+            container.appendChild(row);
+        });
+    }
 
+    function syncMa(h, value) {
+        const v = Math.max(1, parseInt(value, 10) || 1);
+        document.getElementById(`ma_${h}`).value = v;
+        const range = document.getElementById(`ma_range_${h}`);
+        range.value = Math.min(v, parseInt(range.max, 10));
+        updateCustomChart();
+    }
+
+    function movingAverage(values, window) {
+        if (!window || window <= 1) return values;
+        return values.map((_, i) => {
+            let sum = 0, count = 0;
+            for (let j = Math.max(0, i - window + 1); j <= i; j++) {
+                const v = values[j];
+                if (typeof v === 'number' && !isNaN(v)) { sum += v; count++; }
+            }
+            return count ? sum / count : null;
+        });
+    }
+
+    function updateCustomChart() {
         const selectedCols = [];
         parsedCSV.headers.forEach(h => {
             const chk = document.getElementById(`chk_${h}`);
@@ -369,9 +491,11 @@
         const datasets = selectedCols.map((col, index) => {
             const colors = ['#e74c3c', '#3498db', '#9b59b6', '#2ecc71', '#f1c40f', '#34495e', '#e67e22', '#1abc9c'];
             const color = colors[index % colors.length];
+            const maInput = document.getElementById(`ma_${col}`);
+            const window = maInput ? Math.max(1, parseInt(maInput.value, 10) || 1) : 1;
             return {
-                label: col,
-                data: parsedCSV.data.map(r => r[col]),
+                label: window > 1 ? `${col} (MM${window})` : col,
+                data: movingAverage(parsedCSV.data.map(r => r[col]), window),
                 borderColor: color,
                 backgroundColor: color,
                 borderWidth: 1.5,
@@ -380,18 +504,25 @@
             };
         });
 
-        customChartInstance = new Chart(ctx, {
-            type: 'line',
-            data: { labels: labels, datasets: datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                scales: {
-                    x: { ticks: { maxTicksLimit: 15 } }
+        if (!customChartInstance) {
+            const ctx = document.getElementById('customAnalysisChart').getContext('2d');
+            customChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: labels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 15 } }
+                    }
                 }
-            }
-        });
+            });
+            return;
+        }
+        customChartInstance.data.labels = labels;
+        customChartInstance.data.datasets = datasets;
+        customChartInstance.update('none'); // atualiza no lugar, sem reanimar tudo
     }
 
     function createMiniChart(canvasId, label, key, color) {
