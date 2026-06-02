@@ -21,8 +21,15 @@ type LineChartProps = {
 
 /** Merge drag-zoom config into the caller's options without mutating them. */
 function withZoom(options: ChartOptions<"line">, mode: ZoomMode): ChartOptions<"line"> {
+  const basePadding =
+    options.layout?.padding && typeof options.layout.padding === "object"
+      ? options.layout.padding
+      : {};
   return {
     ...options,
+    // Reserve a top band so the legend renders below the floating tool buttons
+    // instead of underneath them.
+    layout: { ...options.layout, padding: { ...basePadding, top: 36 } },
     plugins: {
       ...options.plugins,
       zoom: {
