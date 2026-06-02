@@ -99,6 +99,11 @@ const uint32_t HEALTH_INTERVAL_MS = 5000;
 const uint16_t CURRENT_SAMPLES    = 100;    // janela do sensor de corrente
 const uint32_t PWM_TIMEOUT_MS     = 50;     // sem edge => sinal perdido
 
+// SD: clock SPI conservador (jumper/protoboard nao aguenta os 40MHz padrao)
+const uint32_t SD_SPI_HZ          = 10000000;  // 10 MHz
+const uint8_t  SD_MOUNT_RETRIES   = 3;
+const uint32_t SD_RETRY_COOLDOWN_MS = 2000;    // evita travar o loop tentando remontar
+
 // =========================================================
 // OBJETOS
 // =========================================================
@@ -117,11 +122,12 @@ struct Saude {
   bool      wifiOk;
   bool      ntpOk;
   uint32_t  i2cErr;
+  uint32_t  sdErr;       // falhas de escrita/remontagem do SD
   uint32_t  loopLastMs;
   uint32_t  loopMaxMs;
   uint32_t  bootMs;
 };
-Saude saude = {false, false, false, false, false, 0, 0, 0, 0};
+Saude saude = {false, false, false, false, false, 0, 0, 0, 0, 0};
 
 bool       isRecording   = false;
 File       dataFile;
@@ -130,6 +136,7 @@ uint32_t   packetCounter  = 0;
 uint32_t   lastTxMs       = 0;
 uint32_t   lastFlushMs    = 0;
 uint32_t   lastHealthMs   = 0;
+uint32_t   lastSdRetryMs  = 0;
 float      currentZeroOffsetA = 0;   // calibrado via comando 'c'
 
 enum TipoSinalR84 { UNIDIRECIONAL, BIDIRECIONAL };
@@ -213,6 +220,41 @@ void scanI2C() {
 }
 
 // =========================================================
+// SD: montagem e recuperacao
+// =========================================================
+bool mountSd() {
+  saude.sdOk = SD.begin(PIN_SD_CS, SPI, SD_SPI_HZ);
+  return saude.sdOk;
+}
+
+// Remonta o SD apos uma falha (brownout/glitch SPI desmontam o cartao em pleno
+// voo). Se estava gravando, reabre o arquivo em append para nao perder o log.
+bool sdRemount() {
+  if (dataFile) dataFile.close();
+  SD.end();
+  for (uint8_t i = 0; i < SD_MOUNT_RETRIES; i++) {
+    if (mountSd()) {
+      LOG_OK(F("SD remontado"));
+      if (isRecording) {
+        dataFile = SD.open(currentLogFile, FILE_APPEND);
+        if (!dataFile) {
+          saude.sdErr++;
+          LOG_ERR(F("SD remontado mas reabrir arquivo falhou -- gravacao parada"));
+          isRecording = false;
+          ws.textAll("{\"type\":\"STATUS\", \"recState\":\"STOPPED\", \"file\":\"ERRO_SD\"}");
+        }
+      }
+      return true;
+    }
+    delay(50);
+  }
+  saude.sdErr++;
+  saude.sdOk = false;
+  LOG_ERR(F("SD remontagem falhou -- checar alimentacao 3V3 e cabeamento SPI"));
+  return false;
+}
+
+// =========================================================
 // SELF-TEST DO BOOT
 // =========================================================
 void selfTest() {
@@ -239,7 +281,7 @@ void selfTest() {
 
   // --- SD ---
   SPI.begin(18, 19, 23, PIN_SD_CS);
-  saude.sdOk = SD.begin(PIN_SD_CS);
+  mountSd();
   if (saude.sdOk) {
     uint64_t mb = SD.cardSize() / (1024ULL * 1024ULL);
     Serial.printf("[OK]   SD Card montado: %llu MB, tipo=%d\n", mb, SD.cardType());
@@ -315,8 +357,8 @@ void printDiag() {
                 ESP.getFreeHeap() / 1024,
                 WiFi.RSSI(),
                 WiFi.localIP().toString().c_str());
-  Serial.printf("  saude: ADS1=%d ADS2=%d SD=%d WiFi=%d NTP=%d i2cErr=%u\n",
-                saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk, saude.i2cErr);
+  Serial.printf("  saude: ADS1=%d ADS2=%d SD=%d WiFi=%d NTP=%d i2cErr=%u sdErr=%u\n",
+                saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk, saude.i2cErr, saude.sdErr);
   Serial.printf("  loop: ultimo=%ums max=%ums alvo=%lums\n",
                 saude.loopLastMs, saude.loopMaxMs, TX_INTERVAL_MS);
   float taxa = packetCounter / ((millis() - saude.bootMs) / 1000.0f + 0.001f);
@@ -566,7 +608,13 @@ void doTx() {
   if (n > 0 && n < (int)sizeof(json)) ws.textAll(json);
 
   // CSV (colunas originais preservadas; extras no fim)
-  if (isRecording && dataFile) {
+  if (isRecording && !dataFile) {
+    // SD caiu durante a gravacao -> tenta remontar (com cooldown p/ nao travar o loop)
+    if (millis() - lastSdRetryMs > SD_RETRY_COOLDOWN_MS) {
+      lastSdRetryMs = millis();
+      sdRemount();
+    }
+  } else if (isRecording && dataFile) {
     static char line[256];
     String ts = getTimestamp();
     int m = snprintf(line, sizeof(line),
@@ -576,11 +624,17 @@ void doTx() {
       ult.cells[0], ult.cells[1], ult.cells[2],
       ult.cells[3], ult.cells[4], ult.cells[5],
       ult.currentMean, ult.currentMin, ult.loopMs, ult.pwmAgeMs);
-    if (m > 0 && m < (int)sizeof(line)) dataFile.println(line);
-
-    if (millis() - lastFlushMs > FLUSH_INTERVAL_MS) {
-      dataFile.flush();
-      lastFlushMs = millis();
+    if (m > 0 && m < (int)sizeof(line)) {
+      size_t written = dataFile.println(line);
+      if (written == 0) {
+        // escrita falhou -> cartao provavelmente desmontou
+        saude.sdErr++;
+        LOG_WARN(F("Escrita no SD falhou -- tentando remontar"));
+        sdRemount();
+      } else if (millis() - lastFlushMs > FLUSH_INTERVAL_MS) {
+        dataFile.flush();
+        lastFlushMs = millis();
+      }
     }
   }
 
@@ -595,7 +649,7 @@ void sendDiagWs(AsyncWebSocketClient* cl) {
   snprintf(buf, sizeof(buf),
     "{\"type\":\"DIAG\","
     "\"uptime\":%lu,\"heapKB\":%u,\"rssi\":%ld,"
-    "\"ads1\":%d,\"ads2\":%d,\"sd\":%d,\"wifi\":%d,\"ntp\":%d,\"i2cErr\":%u,"
+    "\"ads1\":%d,\"ads2\":%d,\"sd\":%d,\"wifi\":%d,\"ntp\":%d,\"i2cErr\":%u,\"sdErr\":%u,"
     "\"loopMs\":%u,\"loopMaxMs\":%u,\"loopBudget\":%lu,"
     "\"pktCount\":%u,\"samples\":%u,"
     "\"pwmPulseUs\":%u,\"pwmAgeMs\":%u,\"pwmVal\":%d,"
@@ -603,7 +657,7 @@ void sendDiagWs(AsyncWebSocketClient* cl) {
     "\"recording\":%d,\"file\":\"%s\"}",
     (millis() - saude.bootMs) / 1000,
     ESP.getFreeHeap() / 1024, WiFi.RSSI(),
-    saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk, saude.i2cErr,
+    saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk, saude.i2cErr, saude.sdErr,
     ult.loopMs, saude.loopMaxMs, TX_INTERVAL_MS,
     packetCounter, ult.samples,
     ult.pwmPulseUs, ult.pwmAgeMs, ult.pwmVal,
@@ -637,6 +691,9 @@ void onWsEvent(AsyncWebSocket* /*srv*/, AsyncWebSocketClient* client,
     currentLogFile = "/log_" + getTimestamp() + ".csv";
     Serial.print(F("[INFO] Criando arquivo: ")); Serial.println(currentLogFile);
     dataFile = SD.open(currentLogFile, FILE_WRITE);
+    if (!dataFile && sdRemount()) {     // SD pode ter caido desde o boot -> remonta e tenta de novo
+      dataFile = SD.open(currentLogFile, FILE_WRITE);
+    }
     if (dataFile) {
       LOG_OK(F("Arquivo criado"));
       dataFile.println(F("Timestamp,PacketID,RSSI_dBm,Corrente_A,Comando_Pct,TensaoTotal_V,Celulas_N,C1,C2,C3,C4,C5,C6,Corrente_Med_A,Corrente_Min_A,LoopMs,PwmIdleMs"));
@@ -739,11 +796,11 @@ void setup() {
     char b[320];
     snprintf(b, sizeof(b),
       "{\"uptime\":%lu,\"heapKB\":%u,\"rssi\":%ld,"
-      "\"ads1\":%d,\"ads2\":%d,\"sd\":%d,\"wifi\":%d,\"ntp\":%d,"
+      "\"ads1\":%d,\"ads2\":%d,\"sd\":%d,\"wifi\":%d,\"ntp\":%d,\"sdErr\":%u,"
       "\"pkt\":%u,\"loopMs\":%u,\"loopMaxMs\":%u,"
       "\"recording\":%d}",
       (millis()-saude.bootMs)/1000, ESP.getFreeHeap()/1024, WiFi.RSSI(),
-      saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk,
+      saude.ads1Ok, saude.ads2Ok, saude.sdOk, saude.wifiOk, saude.ntpOk, saude.sdErr,
       packetCounter, ult.loopMs, saude.loopMaxMs,
       isRecording ? 1 : 0);
     req->send(200, "application/json", b);
