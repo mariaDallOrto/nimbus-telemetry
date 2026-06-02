@@ -71,6 +71,7 @@ export default function AnalysisPage() {
   const [dragOver, setDragOver] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [maByColumn, setMaByColumn] = useState<Record<string, number>>({});
+  const [independentScales, setIndependentScales] = useState(true);
 
   // Estimated RPM per row, recomputed whenever the motor params change. When
   // the source columns are present we expose RPM_Est as a virtual column that
@@ -268,6 +269,28 @@ export default function AnalysisPage() {
               title="Gráfico personalizado"
               eyebrow="Selecione as colunas"
               subtitle="As linhas marcadas aparecem no gráfico. A suavização é controlada por coluna abaixo."
+              action={
+                <div className="nt-segmented" role="group" aria-label="Escala dos eixos">
+                  <button
+                    type="button"
+                    className={`nt-segmented__option${independentScales ? " is-active" : ""}`}
+                    aria-pressed={independentScales}
+                    onClick={() => setIndependentScales(true)}
+                    title="Cada série na sua própria escala"
+                  >
+                    Escala por série
+                  </button>
+                  <button
+                    type="button"
+                    className={`nt-segmented__option${independentScales ? "" : " is-active"}`}
+                    aria-pressed={!independentScales}
+                    onClick={() => setIndependentScales(false)}
+                    title="Todas as séries na mesma escala"
+                  >
+                    Compartilhada
+                  </button>
+                </div>
+              }
             >
               <div style={{ marginBottom: 18 }}>
                 <div className="nt-toggle-grid">
@@ -295,6 +318,7 @@ export default function AnalysisPage() {
                       labels={labels}
                       series={customSeries}
                       ariaLabel="Gráfico personalizado"
+                      independentScales={independentScales}
                     />
                   ) : (
                     <div className="nt-empty">
