@@ -42,4 +42,6 @@ export type MotorConfig = {
   kv: number;
   /** Winding resistance in ohms, for the RPM estimate. */
   resistance: number;
+  /** Gearbox reduction ratio (motor : output shaft). 1 = direct drive. */
+  reduction: number;
 };

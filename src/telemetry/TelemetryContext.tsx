@@ -12,7 +12,12 @@ import { estimateRpm } from "./rpm";
 import { parseTelemetryMessage } from "./parseMessage";
 import type { ConnectionStatus, MotorConfig, RecordingStatus, TelemetrySample } from "./types";
 
-const STORAGE_KEYS = { ip: "esp32_ip", kv: "motor_kv", resistance: "motor_r" } as const;
+const STORAGE_KEYS = {
+  ip: "esp32_ip",
+  kv: "motor_kv",
+  resistance: "motor_r",
+  reduction: "motor_reduction",
+} as const;
 const RECONNECT_DELAY_MS = 2000;
 const MAX_SAMPLES = 2000;
 
@@ -48,12 +53,13 @@ function readNumber(key: string, fallback: number): number {
 
 function readInitialConfig(): MotorConfig {
   if (typeof globalThis.localStorage === "undefined") {
-    return { ip: "", kv: 100, resistance: 0.1 };
+    return { ip: "", kv: 100, resistance: 0.1, reduction: 1 };
   }
   return {
     ip: globalThis.localStorage.getItem(STORAGE_KEYS.ip) ?? "",
     kv: readNumber(STORAGE_KEYS.kv, 100),
     resistance: readNumber(STORAGE_KEYS.resistance, 0.1),
+    reduction: readNumber(STORAGE_KEYS.reduction, 1),
   };
 }
 
@@ -90,6 +96,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         store.setItem(STORAGE_KEYS.ip, next.ip);
         store.setItem(STORAGE_KEYS.kv, String(next.kv));
         store.setItem(STORAGE_KEYS.resistance, String(next.resistance));
+        store.setItem(STORAGE_KEYS.reduction, String(next.reduction));
       }
       return next;
     });

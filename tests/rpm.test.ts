@@ -24,4 +24,21 @@ describe("estimateRpm", () => {
     );
     expect(Number.isInteger(rpm)).toBe(true);
   });
+
+  test("divides motor rpm by the gearbox reduction", () => {
+    // motorRpm = (16*0.5 - 10*0.1)*100 = 700; reduction 4 → 175
+    const rpm = estimateRpm(
+      { voltage: 16, stickPct: 50, current: 10 },
+      { kv: 100, resistance: 0.1, reduction: 4 },
+    );
+    expect(rpm).toBe(175);
+  });
+
+  test("treats a non-positive reduction as direct drive", () => {
+    const rpm = estimateRpm(
+      { voltage: 16, stickPct: 50, current: 10 },
+      { kv: 100, resistance: 0.1, reduction: 0 },
+    );
+    expect(rpm).toBe(700);
+  });
 });

@@ -5,7 +5,7 @@ import { Card } from "../components/Card";
 import { ConnectionStatusBadge } from "../components/ConnectionStatusBadge";
 import { Field } from "../components/Field";
 import { MetricRow, MetricTile } from "../components/MetricTile";
-import { NumberField } from "../components/NumberField";
+import { MotorParams } from "../components/MotorParams";
 import { NumberInput } from "../components/NumberInput";
 import { Section } from "../components/Section";
 import { ComboChart } from "../charts/ComboChart";
@@ -132,23 +132,14 @@ export default function LivePage() {
               }
               onChange={(event) => setConfig({ ip: event.target.value })}
             />
-            <NumberField
-              label="KV do motor"
-              value={config.kv}
-              min={0}
-              placeholder="100"
-              hint="rpm / volt"
-              onValueChange={(kv) => setConfig({ kv })}
-            />
-            <NumberField
-              label="Resistência"
-              value={config.resistance}
-              min={0}
-              placeholder="0.10"
-              hint="ohms (Ω)"
-              onValueChange={(resistance) => setConfig({ resistance })}
-            />
           </div>
+        </Card>
+
+        <Card
+          heading="Parâmetros do motor"
+          action={<span className="nb-section__subtitle">Usados na estimativa de RPM</span>}
+        >
+          <MotorParams />
         </Card>
 
         <Section title="Leituras" eyebrow="Agora">
