@@ -1,0 +1,9 @@
+print_width = 100
+tab_width = 2
+use_tabs = false
+semi = true
+single_quote = false
+trailing_comma = "all"
+bracket_spacing = true
+arrow_parens = "always"
+end_of_line = "lf"
