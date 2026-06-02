@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#141414" />
+    <title>Nimbus Telemetria · R84 + HSTS016L</title>
+    <script>
+      // Restore the real URL after the GitHub Pages 404.html SPA redirect.
+      (function () {
+        var search = window.location.search;
+        if (search[1] !== "/") return;
+        var decoded = search
+          .slice(1)
+          .split("&")
+          .map(function (part) {
+            return part.replace(/~and~/g, "&");
+          })
+          .join("?")
+          .replace("/?/", "/");
+        window.history.replaceState(
+          null,
+          null,
+          window.location.pathname.slice(0, -1) + decoded + window.location.hash,
+        );
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/entry.tsx"></script>
+  </body>
+</html>
