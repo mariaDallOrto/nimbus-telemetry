@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { CsvParseError, numericColumn, parseCsv, timeLabels } from "../src/telemetry/csv";
+import {
+  CsvParseError,
+  numericColumn,
+  parseCsv,
+  temporalLabels,
+  timeLabels,
+} from "../src/telemetry/csv";
 
 const SAMPLE = [
   "Timestamp,PacketID,Corrente_A,TensaoTotal_V",
@@ -46,5 +52,29 @@ describe("timeLabels", () => {
   test("shortens ISO timestamps to a readable time", () => {
     const parsed = parseCsv(SAMPLE);
     expect(timeLabels(parsed.rows)).toEqual(["14:00:00", "14:00:01"]);
+  });
+});
+
+describe("temporalLabels", () => {
+  test("keeps whole-second labels when each second has one sample", () => {
+    const parsed = parseCsv(SAMPLE);
+    expect(temporalLabels(parsed.rows)).toEqual(["14:00:00", "14:00:01"]);
+  });
+
+  test("spreads samples sharing a second across sub-second offsets", () => {
+    const text = [
+      "Timestamp,Corrente_A",
+      "2023-10-10T14_00_00,1",
+      "2023-10-10T14_00_00,2",
+      "2023-10-10T14_00_00,3",
+      "2023-10-10T14_00_00,4",
+    ].join("\n");
+    const parsed = parseCsv(text);
+    expect(temporalLabels(parsed.rows)).toEqual([
+      "14:00:00.000",
+      "14:00:00.250",
+      "14:00:00.500",
+      "14:00:00.750",
+    ]);
   });
 });
