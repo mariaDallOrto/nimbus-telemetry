@@ -135,6 +135,12 @@ export function ComboChart({
   );
 
   return (
-    <LineChart data={data} options={options} ariaLabel="Gráfico ao vivo: stick, corrente e RPM" />
+    <LineChart
+      data={data}
+      options={options}
+      ariaLabel="Gráfico ao vivo: stick, corrente e RPM"
+      zoomable
+      zoomMode="x"
+    />
   );
 }

@@ -68,5 +68,5 @@ export function SeriesChart({ labels, series, ariaLabel }: SeriesChartProps) {
     [],
   );
 
-  return <LineChart data={data} options={options} ariaLabel={ariaLabel} />;
+  return <LineChart data={data} options={options} ariaLabel={ariaLabel} zoomable zoomMode="x" />;
 }
