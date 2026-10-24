@@ -1,4 +1,5 @@
-import { useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { MotorParams } from "../components/MotorParams";
@@ -34,51 +35,60 @@ const RPM_SOURCE_COLUMNS = ["TensaoTotal_V", "Comando_Pct", "Corrente_A"];
 const DEFAULT_SELECTED = ["Corrente_A", "TensaoTotal_V", "Comando_Pct", "RSSI_dBm", RPM_COLUMN];
 const EXCLUDED_COLUMNS = new Set(["Timestamp", "PacketID"]);
 
-type ExampleLog = { file: string; name: string; description: string };
+type ExampleLog = { id: string; file: string; name: string; description: string };
 
-/** Sample logs bundled in /public/examples for quick exploration, grouped by section. */
+/** Sample logs bundled in /public/examples, grouped by section and sorted oldest first. */
 const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
+  {
+    title: "Anteriores",
+    logs: [
+      {
+        id: "teste-paje",
+        file: "test_paje.csv",
+        name: "Teste Pajé",
+        description: "Teste de demonstração gravado para mostrar ao Pajé.",
+      },
+      {
+        id: "pico",
+        file: "pico.csv",
+        name: "Pico",
+        description: "Teste para validar o pico de corrente da arma.",
+      },
+      {
+        id: "pico-balta-luta",
+        file: "pico_balta_luta.csv",
+        name: "Pico Balta (luta)",
+        description: "Pico do jeito que o Balta acelera a arma em luta.",
+      },
+      {
+        id: "pico-balta-luta-2",
+        file: "pico_balta_luta2.csv",
+        name: "Pico Balta (luta) · 2",
+        description: "Segunda captura do pico com o Balta acelerando em luta.",
+      },
+    ],
+  },
   {
     title: "Hoje · 24/10/2026",
     logs: [
       {
+        id: "bateria-acabando",
         file: "2026-10-24/14h23.csv",
-        name: "Log 14h23",
-        description: "Penúltimo log gravado hoje (24/10), às 14h23.",
+        name: "Bateria acabando",
+        description: "Gravado às 14h23 com a bateria já descarregada (~15,5 V em repouso).",
       },
       {
+        id: "bateria-prime",
         file: "2026-10-24/14h38.csv",
-        name: "Log 14h38",
-        description: "Último log gravado hoje (24/10), às 14h38.",
+        name: "Bateria prime",
+        description: "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
       },
-    ],
-  },
-  {
-    title: "Anteriores",
-    logs: [
-    {
-      file: "pico.csv",
-      name: "Pico",
-      description: "Teste para validar o pico de corrente da arma.",
-    },
-    {
-      file: "pico_balta_luta.csv",
-      name: "Pico Balta (luta)",
-      description: "Pico do jeito que o Balta acelera a arma em luta.",
-    },
-    {
-      file: "pico_balta_luta2.csv",
-      name: "Pico Balta (luta) · 2",
-      description: "Segunda captura do pico com o Balta acelerando em luta.",
-    },
-    {
-      file: "test_paje.csv",
-      name: "Teste Pajé",
-      description: "Teste de demonstração gravado para mostrar ao Pajé.",
-    },
     ],
   },
 ];
+
+const EXAMPLE_LOGS = EXAMPLE_SECTIONS.flatMap((section) => section.logs);
+const EXAMPLE_QUERY_PARAM = "log";
 
 const COLUMN_COLORS: Record<string, string> = {
   Corrente_A: CHART_COLOR_CURRENT,
@@ -108,10 +118,12 @@ function numCell(value: CsvValue | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-type LoadedFile = { name: string; parsed: ParsedCsv };
+type LoadedFile = { name: string; parsed: ParsedCsv; exampleId?: string | undefined };
 
 export default function AnalysisPage() {
   const { config } = useTelemetry();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const exampleId = searchParams.get(EXAMPLE_QUERY_PARAM);
   const [file, setFile] = useState<LoadedFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -162,11 +174,11 @@ export default function AnalysisPage() {
       });
   }, [file, model, plottableColumns, selected, maByColumn]);
 
-  const loadCsvText = (name: string, text: string) => {
+  const loadCsvText = (name: string, text: string, loadedExampleId?: string) => {
     try {
       const parsed = parseCsv(text);
       const hasRpm = RPM_SOURCE_COLUMNS.every((column) => parsed.headers.includes(column));
-      setFile({ name, parsed });
+      setFile({ name, parsed, exampleId: loadedExampleId });
       setError(null);
       setSelected(
         new Set(
@@ -192,18 +204,37 @@ export default function AnalysisPage() {
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => readFile(event.target.files?.[0]);
 
-  const loadExample = async (example: ExampleLog) => {
-    setError(null);
-    setLoadingExample(example.file);
-    try {
-      const response = await fetch(`${import.meta.env.BASE_URL}examples/${example.file}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      loadCsvText(example.name, await response.text());
-    } catch {
-      setError(`Não foi possível carregar o exemplo "${example.name}".`);
-    } finally {
-      setLoadingExample(null);
+  useEffect(() => {
+    const example = EXAMPLE_LOGS.find((candidate) => candidate.id === exampleId);
+    if (!example) {
+      setFile((current) => (current?.exampleId ? null : current));
+      return;
     }
+    const controller = new AbortController();
+    setError(null);
+    setLoadingExample(example.id);
+    fetch(`${import.meta.env.BASE_URL}examples/${example.file}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.text();
+      })
+      .then((text) => loadCsvText(example.name, text, example.id))
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        setError(`Não foi possível carregar o exemplo "${example.name}".`);
+        console.error("example log fetch failed", caught);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingExample(null);
+      });
+    return () => controller.abort();
+  }, [exampleId]);
+
+  const openExample = (example: ExampleLog) => setSearchParams({ [EXAMPLE_QUERY_PARAM]: example.id });
+
+  const backToStart = () => {
+    setFile(null);
+    setSearchParams({});
   };
 
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
@@ -251,15 +282,20 @@ export default function AnalysisPage() {
         {file ? (
           <Card
             action={
-              <label className="nb-btn nb-btn--secondary" style={{ cursor: "pointer" }}>
-                Trocar arquivo
-                <input
-                  type="file"
-                  accept=".csv"
-                  className="nb-visually-hidden"
-                  onChange={handleInput}
-                />
-              </label>
+              <div className="nt-file-actions">
+                <button type="button" className="nb-btn nb-btn--secondary" onClick={backToStart}>
+                  ← Voltar
+                </button>
+                <label className="nb-btn nb-btn--secondary" style={{ cursor: "pointer" }}>
+                  Trocar arquivo
+                  <input
+                    type="file"
+                    accept=".csv"
+                    className="nb-visually-hidden"
+                    onChange={handleInput}
+                  />
+                </label>
+              </div>
             }
           >
             <div className="nt-file-summary">
@@ -313,17 +349,17 @@ export default function AnalysisPage() {
                   <div className="nt-examples__grid">
                     {section.logs.map((example) => (
                       <button
-                        key={example.file}
+                        key={example.id}
                         type="button"
                         className="nt-example"
                         disabled={loadingExample !== null}
-                        aria-busy={loadingExample === example.file}
-                        onClick={() => loadExample(example)}
+                        aria-busy={loadingExample === example.id}
+                        onClick={() => openExample(example)}
                       >
                         <span className="nt-example__name">{example.name}</span>
                         <span className="nt-example__desc">{example.description}</span>
                         <span className="nt-example__cta" aria-hidden>
-                          {loadingExample === example.file ? "Carregando…" : "Abrir exemplo →"}
+                          {loadingExample === example.id ? "Carregando…" : "Abrir exemplo →"}
                         </span>
                       </button>
                     ))}

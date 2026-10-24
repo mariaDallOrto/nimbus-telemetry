@@ -1559,3 +1559,9 @@ button {
     animation: none;
   }
 }
+
+.nt-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
