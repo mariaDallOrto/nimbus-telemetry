@@ -32,6 +32,7 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Wire.h>
+#include <Preferences.h>
 #include <Adafruit_ADS1X15.h>
 #include "time.h"
 #include "SPI.h"
@@ -137,7 +138,8 @@ uint32_t   lastTxMs       = 0;
 uint32_t   lastFlushMs    = 0;
 uint32_t   lastHealthMs   = 0;
 uint32_t   lastSdRetryMs  = 0;
-float      currentZeroOffsetA = 0;   // calibrado via comando 'c'
+float      currentZeroOffsetA = 0;   // calibrado via comando 'c', persistido em NVS
+Preferences calibrationStore;
 
 enum TipoSinalR84 { UNIDIRECIONAL, BIDIRECIONAL };
 TipoSinalR84 tipoSinal = UNIDIRECIONAL;
@@ -419,7 +421,10 @@ void calibrateCurrentZero() {
     sum_curr += ((v_out - v_ref) / TENSAO_VARIACAO) * CORRENTE_NOMINAL;
   }
   currentZeroOffsetA = sum_curr / N;
-  Serial.printf("[CAL] Offset = %.3fA (sera subtraido de todas as leituras)\n", currentZeroOffsetA);
+  calibrationStore.begin("calib", false);
+  calibrationStore.putFloat("zeroA", currentZeroOffsetA);
+  calibrationStore.end();
+  Serial.printf("[CAL] Offset = %.3fA (salvo em NVS, sera subtraido de todas as leituras)\n", currentZeroOffsetA);
 }
 
 void handleSerialCmd() {
@@ -594,12 +599,12 @@ void doTx() {
   static char json[512];
   int n = snprintf(json, sizeof(json),
     "{\"id\":%u,\"rssi\":%ld,"
-    "\"current\":%.2f,\"currentMean\":%.2f,\"currentMin\":%.2f,"
+    "\"current\":%.2f,\"currentPeak\":%.2f,\"currentMin\":%.2f,"
     "\"pwmVal\":%d,\"vTotal\":%.2f,\"nCells\":%d,"
     "\"c1\":%.2f,\"c2\":%.2f,\"c3\":%.2f,\"c4\":%.2f,\"c5\":%.2f,\"c6\":%.2f,"
     "\"loopMs\":%u,\"samples\":%u,\"pwmAgeMs\":%u,\"heapKB\":%u,\"i2cErr\":%u}",
     packetCounter, WiFi.RSSI(),
-    ult.currentPeak, ult.currentMean, ult.currentMin,
+    ult.currentMean, ult.currentPeak, ult.currentMin,
     ult.pwmVal, ult.vTotal, ult.nCells,
     ult.cells[0], ult.cells[1], ult.cells[2],
     ult.cells[3], ult.cells[4], ult.cells[5],
@@ -737,6 +742,10 @@ void setup() {
 
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
+
+  calibrationStore.begin("calib", true);
+  currentZeroOffsetA = calibrationStore.getFloat("zeroA", 0);
+  calibrationStore.end();
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
