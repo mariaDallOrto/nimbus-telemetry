@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
@@ -8,6 +14,7 @@ import { Section } from "../components/Section";
 import { MiniChart } from "../charts/MiniChart";
 import { SeriesChart, type ChartSeries } from "../charts/SeriesChart";
 import {
+  CHART_COLOR_CLAMP,
   CHART_COLOR_CURRENT,
   CHART_COLOR_RPM,
   CHART_COLOR_RSSI,
@@ -31,11 +38,51 @@ import { intOrDash } from "../ui/format";
 const ROW_LIMIT = 200;
 /** Derived (not logged) column: RPM estimated from voltage, stick and current. */
 const RPM_COLUMN = "RPM_Est";
-const RPM_SOURCE_COLUMNS = ["TensaoTotal_V", "Comando_Pct", "Corrente_A"];
-const DEFAULT_SELECTED = ["Corrente_A", "TensaoTotal_V", "Comando_Pct", "RSSI_dBm", RPM_COLUMN];
+/** Manual clamp-meter readings; sparse, filled only on rows where a reading was taken. */
+const CLAMP_COLUMN = "Alicate_A";
+/** Current columns share one Y axis so the clamp readings line up with the sensor. */
+const CURRENT_COLUMNS = new Set([
+  "Corrente_A",
+  "Corrente_Med_A",
+  "Corrente_Min_A",
+  CLAMP_COLUMN,
+]);
+const MEAN_CURRENT_COLUMN = "Corrente_Med_A";
+const RAW_CURRENT_COLUMN = "Corrente_A";
+
+/** The mean current is the reliable reading; the others are noisy. Older logs only have the raw one. */
+function currentColumn(headers: readonly string[]): string {
+  return headers.includes(MEAN_CURRENT_COLUMN)
+    ? MEAN_CURRENT_COLUMN
+    : RAW_CURRENT_COLUMN;
+}
+
+const CURRENT_ALIAS = "@current";
+
+function resolveColumn(key: string, headers: readonly string[]): string {
+  return key === CURRENT_ALIAS ? currentColumn(headers) : key;
+}
+
+function rpmSourceColumns(headers: readonly string[]): string[] {
+  return ["TensaoTotal_V", "Comando_Pct", currentColumn(headers)];
+}
+
+const DEFAULT_SELECTED = [
+  CURRENT_ALIAS,
+  "TensaoTotal_V",
+  "Comando_Pct",
+  "RSSI_dBm",
+  RPM_COLUMN,
+  CLAMP_COLUMN,
+];
 const EXCLUDED_COLUMNS = new Set(["Timestamp", "PacketID"]);
 
-type ExampleLog = { id: string; file: string; name: string; description: string };
+type ExampleLog = {
+  id: string;
+  file: string;
+  name: string;
+  description: string;
+};
 
 /** Sample logs bundled in /public/examples, grouped by section and sorted oldest first. */
 const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
@@ -75,13 +122,15 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
         id: "bateria-acabando",
         file: "2026-10-24/14h23.csv",
         name: "Bateria acabando",
-        description: "Gravado às 14h23 com a bateria já descarregada (~15,5 V em repouso).",
+        description:
+          "Gravado às 14h23 com a bateria já descarregada (~15,5 V em repouso).",
       },
       {
         id: "bateria-prime",
         file: "2026-10-24/14h38.csv",
         name: "Bateria prime",
-        description: "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
+        description:
+          "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
       },
     ],
   },
@@ -91,7 +140,9 @@ const EXAMPLE_LOGS = EXAMPLE_SECTIONS.flatMap((section) => section.logs);
 const EXAMPLE_QUERY_PARAM = "log";
 
 const COLUMN_COLORS: Record<string, string> = {
-  Corrente_A: CHART_COLOR_CURRENT,
+  [RAW_CURRENT_COLUMN]: CHART_COLOR_CURRENT,
+  [MEAN_CURRENT_COLUMN]: CHART_COLOR_CURRENT,
+  [CLAMP_COLUMN]: CHART_COLOR_CLAMP,
   TensaoTotal_V: CHART_COLOR_VOLTAGE,
   Comando_Pct: CHART_COLOR_STICK,
   RSSI_dBm: CHART_COLOR_RSSI,
@@ -99,7 +150,7 @@ const COLUMN_COLORS: Record<string, string> = {
 };
 
 const OVERVIEW_CHARTS = [
-  { key: "Corrente_A", label: "Corrente (A)", color: CHART_COLOR_CURRENT },
+  { key: CURRENT_ALIAS, label: "Corrente (A)", color: CHART_COLOR_CURRENT },
   { key: "TensaoTotal_V", label: "Tensão (V)", color: CHART_COLOR_VOLTAGE },
   { key: "Comando_Pct", label: "Stick (%)", color: CHART_COLOR_STICK },
   { key: RPM_COLUMN, label: "RPM Est.", color: CHART_COLOR_RPM },
@@ -107,7 +158,9 @@ const OVERVIEW_CHARTS = [
 ] as const;
 
 function isPlottable(header: string): boolean {
-  return !EXCLUDED_COLUMNS.has(header) && !header.toLowerCase().includes("time");
+  return (
+    !EXCLUDED_COLUMNS.has(header) && !header.toLowerCase().includes("time")
+  );
 }
 
 function columnColor(header: string, index: number): string {
@@ -118,7 +171,11 @@ function numCell(value: CsvValue | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-type LoadedFile = { name: string; parsed: ParsedCsv; exampleId?: string | undefined };
+type LoadedFile = {
+  name: string;
+  parsed: ParsedCsv;
+  exampleId?: string | undefined;
+};
 
 export default function AnalysisPage() {
   const { config } = useTelemetry();
@@ -137,21 +194,33 @@ export default function AnalysisPage() {
   // the chart, overview, smoothing and table all treat like a logged one.
   const model = useMemo(() => {
     if (!file) return null;
-    const hasRpm = RPM_SOURCE_COLUMNS.every((column) => file.parsed.headers.includes(column));
+    const sourceColumns = rpmSourceColumns(file.parsed.headers);
+    const hasRpm = sourceColumns.every((column) =>
+      file.parsed.headers.includes(column),
+    );
     const rpm: (number | null)[] = file.parsed.rows.map((row) => {
       const voltage = numCell(row["TensaoTotal_V"]);
       const stickPct = numCell(row["Comando_Pct"]);
-      const current = numCell(row["Corrente_A"]);
-      if (voltage === null || stickPct === null || current === null) return null;
+      const current = numCell(row[currentColumn(file.parsed.headers)]);
+      if (voltage === null || stickPct === null || current === null)
+        return null;
       return estimateRpm({ voltage, stickPct, current }, config);
     });
-    const headers = hasRpm ? [...file.parsed.headers, RPM_COLUMN] : file.parsed.headers;
+    const headers = hasRpm
+      ? [...file.parsed.headers, RPM_COLUMN]
+      : file.parsed.headers;
     return { headers, rpm, hasRpm };
   }, [file, config]);
 
-  const plottableColumns = useMemo(() => (model ? model.headers.filter(isPlottable) : []), [model]);
+  const plottableColumns = useMemo(
+    () => (model ? model.headers.filter(isPlottable) : []),
+    [model],
+  );
 
-  const labels = useMemo(() => (file ? temporalLabels(file.parsed.rows) : []), [file]);
+  const labels = useMemo(
+    () => (file ? temporalLabels(file.parsed.rows) : []),
+    [file],
+  );
 
   const columnSeries = (header: string): (number | null)[] => {
     if (!file) return [];
@@ -165,24 +234,37 @@ export default function AnalysisPage() {
       .filter((header) => selected.has(header))
       .map((header, index) => {
         const window = maByColumn[header] ?? 1;
-        const raw = header === RPM_COLUMN ? model.rpm : numericColumn(file.parsed.rows, header);
+        const raw =
+          header === RPM_COLUMN
+            ? model.rpm
+            : numericColumn(file.parsed.rows, header);
         return {
           label: window > 1 ? `${header} (MM${window})` : header,
           data: movingAverage(raw, window),
           color: columnColor(header, index),
+          markers: header === CLAMP_COLUMN,
+          ...(CURRENT_COLUMNS.has(header) ? { scaleGroup: "current" } : {}),
         };
       });
   }, [file, model, plottableColumns, selected, maByColumn]);
 
-  const loadCsvText = (name: string, text: string, loadedExampleId?: string) => {
+  const loadCsvText = (
+    name: string,
+    text: string,
+    loadedExampleId?: string,
+  ) => {
     try {
       const parsed = parseCsv(text);
-      const hasRpm = RPM_SOURCE_COLUMNS.every((column) => parsed.headers.includes(column));
+      const hasRpm = rpmSourceColumns(parsed.headers).every((column) =>
+        parsed.headers.includes(column),
+      );
       setFile({ name, parsed, exampleId: loadedExampleId });
       setError(null);
       setSelected(
         new Set(
-          DEFAULT_SELECTED.filter((column) =>
+          DEFAULT_SELECTED.map((column) =>
+            resolveColumn(column, parsed.headers),
+          ).filter((column) =>
             column === RPM_COLUMN ? hasRpm : parsed.headers.includes(column),
           ),
         ),
@@ -190,22 +272,30 @@ export default function AnalysisPage() {
       setMaByColumn({});
     } catch (caught) {
       setFile(null);
-      setError(caught instanceof CsvParseError ? caught.message : "Falha ao ler o arquivo.");
+      setError(
+        caught instanceof CsvParseError
+          ? caught.message
+          : "Falha ao ler o arquivo.",
+      );
     }
   };
 
   const readFile = (selectedFile: File | undefined) => {
     if (!selectedFile) return;
     const reader = new FileReader();
-    reader.onload = (event) => loadCsvText(selectedFile.name, String(event.target?.result ?? ""));
+    reader.onload = (event) =>
+      loadCsvText(selectedFile.name, String(event.target?.result ?? ""));
     reader.onerror = () => setError("Não foi possível ler o arquivo.");
     reader.readAsText(selectedFile);
   };
 
-  const handleInput = (event: ChangeEvent<HTMLInputElement>) => readFile(event.target.files?.[0]);
+  const handleInput = (event: ChangeEvent<HTMLInputElement>) =>
+    readFile(event.target.files?.[0]);
 
   useEffect(() => {
-    const example = EXAMPLE_LOGS.find((candidate) => candidate.id === exampleId);
+    const example = EXAMPLE_LOGS.find(
+      (candidate) => candidate.id === exampleId,
+    );
     if (!example) {
       setFile((current) => (current?.exampleId ? null : current));
       return;
@@ -213,7 +303,9 @@ export default function AnalysisPage() {
     const controller = new AbortController();
     setError(null);
     setLoadingExample(example.id);
-    fetch(`${import.meta.env.BASE_URL}examples/${example.file}`, { signal: controller.signal })
+    fetch(`${import.meta.env.BASE_URL}examples/${example.file}`, {
+      signal: controller.signal,
+    })
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.text();
@@ -230,7 +322,8 @@ export default function AnalysisPage() {
     return () => controller.abort();
   }, [exampleId]);
 
-  const openExample = (example: ExampleLog) => setSearchParams({ [EXAMPLE_QUERY_PARAM]: example.id });
+  const openExample = (example: ExampleLog) =>
+    setSearchParams({ [EXAMPLE_QUERY_PARAM]: example.id });
 
   const backToStart = () => {
     setFile(null);
@@ -258,8 +351,13 @@ export default function AnalysisPage() {
 
   const rowCount = file?.parsed.rows.length ?? 0;
   const shownRows = Math.min(rowCount, ROW_LIMIT);
-  const overviewCharts = OVERVIEW_CHARTS.filter((chart) =>
-    chart.key === RPM_COLUMN ? model?.hasRpm : file?.parsed.headers.includes(chart.key),
+  const overviewCharts = OVERVIEW_CHARTS.map((chart) => ({
+    ...chart,
+    column: resolveColumn(chart.key, file?.parsed.headers ?? []),
+  })).filter((chart) =>
+    chart.column === RPM_COLUMN
+      ? model?.hasRpm
+      : file?.parsed.headers.includes(chart.column),
   );
 
   return (
@@ -273,8 +371,8 @@ export default function AnalysisPage() {
             </div>
             <h1 className="nb-hero__title">Análise de CSV</h1>
             <p className="nb-hero__lede">
-              Carregue um log gravado no cartão SD do ESP32 para montar gráficos personalizados,
-              suavizar séries e inspecionar os dados brutos.
+              Carregue um log gravado no cartão SD do ESP32 para montar gráficos
+              personalizados, suavizar séries e inspecionar os dados brutos.
             </p>
           </div>
         </header>
@@ -283,10 +381,17 @@ export default function AnalysisPage() {
           <Card
             action={
               <div className="nt-file-actions">
-                <button type="button" className="nb-btn nb-btn--secondary" onClick={backToStart}>
+                <button
+                  type="button"
+                  className="nb-btn nb-btn--secondary"
+                  onClick={backToStart}
+                >
                   ← Voltar
                 </button>
-                <label className="nb-btn nb-btn--secondary" style={{ cursor: "pointer" }}>
+                <label
+                  className="nb-btn nb-btn--secondary"
+                  style={{ cursor: "pointer" }}
+                >
                   Trocar arquivo
                   <input
                     type="file"
@@ -335,9 +440,12 @@ export default function AnalysisPage() {
               <span className="nt-dropzone__icon" aria-hidden>
                 📂
               </span>
-              <span className="nt-dropzone__title">Carregar arquivo de log (.csv)</span>
+              <span className="nt-dropzone__title">
+                Carregar arquivo de log (.csv)
+              </span>
               <span className="nt-dropzone__hint">
-                Arraste o arquivo baixado do ESP32 aqui, ou clique para selecionar.
+                Arraste o arquivo baixado do ESP32 aqui, ou clique para
+                selecionar.
               </span>
             </label>
 
@@ -345,7 +453,9 @@ export default function AnalysisPage() {
               <div className="nt-examples__title">Ou comece com um exemplo</div>
               {EXAMPLE_SECTIONS.map((section) => (
                 <section key={section.title} className="nt-examples__section">
-                  <h3 className="nt-examples__section-title">{section.title}</h3>
+                  <h3 className="nt-examples__section-title">
+                    {section.title}
+                  </h3>
                   <div className="nt-examples__grid">
                     {section.logs.map((example) => (
                       <button
@@ -357,9 +467,13 @@ export default function AnalysisPage() {
                         onClick={() => openExample(example)}
                       >
                         <span className="nt-example__name">{example.name}</span>
-                        <span className="nt-example__desc">{example.description}</span>
+                        <span className="nt-example__desc">
+                          {example.description}
+                        </span>
                         <span className="nt-example__cta" aria-hidden>
-                          {loadingExample === example.id ? "Carregando…" : "Abrir exemplo →"}
+                          {loadingExample === example.id
+                            ? "Carregando…"
+                            : "Abrir exemplo →"}
                         </span>
                       </button>
                     ))}
@@ -383,7 +497,8 @@ export default function AnalysisPage() {
               {model && !model.hasRpm ? (
                 <div style={{ marginTop: 14 }}>
                   <Alert variant="info">
-                    RPM não calculado: o log não tem as colunas {RPM_SOURCE_COLUMNS.join(", ")}.
+                    RPM não calculado: o log não tem as colunas{" "}
+                    {rpmSourceColumns(file?.parsed.headers ?? []).join(", ")}.
                   </Alert>
                 </div>
               ) : null}
@@ -394,7 +509,11 @@ export default function AnalysisPage() {
               eyebrow="Selecione as colunas"
               subtitle="As linhas marcadas aparecem no gráfico. A suavização é controlada por coluna abaixo."
               action={
-                <div className="nt-segmented" role="group" aria-label="Escala dos eixos">
+                <div
+                  className="nt-segmented"
+                  role="group"
+                  aria-label="Escala dos eixos"
+                >
                   <button
                     type="button"
                     className={`nt-segmented__option${independentScales ? " is-active" : ""}`}
@@ -449,7 +568,9 @@ export default function AnalysisPage() {
                       <span className="nt-empty__icon" aria-hidden>
                         📊
                       </span>
-                      <span className="nt-empty__title">Nenhuma coluna selecionada</span>
+                      <span className="nt-empty__title">
+                        Nenhuma coluna selecionada
+                      </span>
                       <span className="nt-empty__hint">
                         Marque ao menos uma coluna acima para montar o gráfico.
                       </span>
@@ -478,7 +599,10 @@ export default function AnalysisPage() {
                           value={Math.min(window, 50)}
                           aria-label={`Média móvel de ${header}`}
                           onChange={(event) =>
-                            setColumnMa(header, Number.parseInt(event.target.value, 10))
+                            setColumnMa(
+                              header,
+                              Number.parseInt(event.target.value, 10),
+                            )
                           }
                         />
                         <NumberInput
@@ -501,7 +625,7 @@ export default function AnalysisPage() {
                   <Card key={chart.key} heading={chart.label}>
                     <MiniChart
                       labels={labels}
-                      data={columnSeries(chart.key)}
+                      data={columnSeries(chart.column)}
                       color={chart.color}
                       label={chart.label}
                     />
@@ -530,17 +654,23 @@ export default function AnalysisPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {file.parsed.rows.slice(0, ROW_LIMIT).map((row, index) => (
-                        <tr key={String(row["PacketID"] ?? Object.values(row).join("|"))}>
-                          {model?.headers.map((header) => (
-                            <td key={header}>
-                              {header === RPM_COLUMN
-                                ? intOrDash(model.rpm[index] ?? null)
-                                : String(row[header] ?? "")}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
+                      {file.parsed.rows
+                        .slice(0, ROW_LIMIT)
+                        .map((row, index) => (
+                          <tr
+                            key={String(
+                              row["PacketID"] ?? Object.values(row).join("|"),
+                            )}
+                          >
+                            {model?.headers.map((header) => (
+                              <td key={header}>
+                                {header === RPM_COLUMN
+                                  ? intOrDash(model.rpm[index] ?? null)
+                                  : String(row[header] ?? "")}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>

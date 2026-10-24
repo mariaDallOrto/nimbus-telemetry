@@ -8,7 +8,15 @@ export type ChartSeries = {
   label: string;
   data: readonly (number | null)[];
   color: string;
+  /** Sparse manual readings: draw each value as a dot and connect them across gaps. */
+  markers?: boolean;
+  /** Series sharing a group share one Y axis even when scales are independent. */
+  scaleGroup?: string;
 };
+
+function axisId(entry: ChartSeries, index: number): string {
+  return `y${entry.scaleGroup ?? index}`;
+}
 
 type SeriesChartProps = {
   labels: readonly string[];
@@ -38,9 +46,10 @@ export function SeriesChart({
         borderColor: entry.color,
         backgroundColor: entry.color,
         borderWidth: 1.5,
-        pointRadius: 0,
+        pointRadius: entry.markers ? 4 : 0,
+        spanGaps: entry.markers ?? false,
         tension: 0.1,
-        yAxisID: independentScales ? `y${index}` : "y",
+        yAxisID: independentScales ? axisId(entry, index) : "y",
       })),
     }),
     [labels, series, independentScales],
@@ -49,7 +58,11 @@ export function SeriesChart({
   const options = useMemo<ChartOptions<"line">>(() => {
     const scales: NonNullable<ChartOptions<"line">["scales"]> = {
       x: {
-        ticks: { color: CHART_COLOR_TEXT_SOFT, font: AXIS_FONT, maxTicksLimit: 12 },
+        ticks: {
+          color: CHART_COLOR_TEXT_SOFT,
+          font: AXIS_FONT,
+          maxTicksLimit: 12,
+        },
         grid: { color: CHART_COLOR_GRID_LINE },
       },
     };
@@ -57,8 +70,8 @@ export function SeriesChart({
       // Per-series hidden axes. Only the first draws gridlines (visual
       // structure); numbers are hidden since each series has its own scale —
       // exact values stay available in the tooltip.
-      series.forEach((_, index) => {
-        scales[`y${index}`] = {
+      [...new Set(series.map(axisId))].forEach((id, index) => {
+        scales[id] = {
           type: "linear",
           position: "left",
           display: index === 0,
@@ -96,5 +109,13 @@ export function SeriesChart({
     };
   }, [independentScales, series]);
 
-  return <LineChart data={data} options={options} ariaLabel={ariaLabel} zoomable zoomMode="x" />;
+  return (
+    <LineChart
+      data={data}
+      options={options}
+      ariaLabel={ariaLabel}
+      zoomable
+      zoomMode="x"
+    />
+  );
 }

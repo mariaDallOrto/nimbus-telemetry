@@ -3,6 +3,7 @@
 
 export const CHART_COLOR_STICK = "#c7a6ff";
 export const CHART_COLOR_CURRENT = "#ff5c7c";
+export const CHART_COLOR_CLAMP = "#ffe14d";
 export const CHART_COLOR_RPM = "#ff9f45";
 export const CHART_COLOR_VOLTAGE = "#34d399";
 export const CHART_COLOR_RSSI = "#5ea8ff";
