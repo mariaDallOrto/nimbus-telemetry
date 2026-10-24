@@ -34,29 +34,51 @@ const RPM_SOURCE_COLUMNS = ["TensaoTotal_V", "Comando_Pct", "Corrente_A"];
 const DEFAULT_SELECTED = ["Corrente_A", "TensaoTotal_V", "Comando_Pct", "RSSI_dBm", RPM_COLUMN];
 const EXCLUDED_COLUMNS = new Set(["Timestamp", "PacketID"]);
 
-/** Sample logs bundled in /public/examples for quick exploration. */
-const EXAMPLE_LOGS = [
+type ExampleLog = { file: string; name: string; description: string };
+
+/** Sample logs bundled in /public/examples for quick exploration, grouped by section. */
+const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
   {
-    file: "pico.csv",
-    name: "Pico",
-    description: "Teste para validar o pico de corrente da arma.",
+    title: "Hoje · 24/10/2026",
+    logs: [
+      {
+        file: "2026-10-24/14h23.csv",
+        name: "Log 14h23",
+        description: "Penúltimo log gravado hoje (24/10), às 14h23.",
+      },
+      {
+        file: "2026-10-24/14h38.csv",
+        name: "Log 14h38",
+        description: "Último log gravado hoje (24/10), às 14h38.",
+      },
+    ],
   },
   {
-    file: "pico_balta_luta.csv",
-    name: "Pico Balta (luta)",
-    description: "Pico do jeito que o Balta acelera a arma em luta.",
+    title: "Anteriores",
+    logs: [
+    {
+      file: "pico.csv",
+      name: "Pico",
+      description: "Teste para validar o pico de corrente da arma.",
+    },
+    {
+      file: "pico_balta_luta.csv",
+      name: "Pico Balta (luta)",
+      description: "Pico do jeito que o Balta acelera a arma em luta.",
+    },
+    {
+      file: "pico_balta_luta2.csv",
+      name: "Pico Balta (luta) · 2",
+      description: "Segunda captura do pico com o Balta acelerando em luta.",
+    },
+    {
+      file: "test_paje.csv",
+      name: "Teste Pajé",
+      description: "Teste de demonstração gravado para mostrar ao Pajé.",
+    },
+    ],
   },
-  {
-    file: "pico_balta_luta2.csv",
-    name: "Pico Balta (luta) · 2",
-    description: "Segunda captura do pico com o Balta acelerando em luta.",
-  },
-  {
-    file: "test_paje.csv",
-    name: "Teste Pajé",
-    description: "Teste de demonstração gravado para mostrar ao Pajé.",
-  },
-] as const;
+];
 
 const COLUMN_COLORS: Record<string, string> = {
   Corrente_A: CHART_COLOR_CURRENT,
@@ -170,7 +192,7 @@ export default function AnalysisPage() {
 
   const handleInput = (event: ChangeEvent<HTMLInputElement>) => readFile(event.target.files?.[0]);
 
-  const loadExample = async (example: (typeof EXAMPLE_LOGS)[number]) => {
+  const loadExample = async (example: ExampleLog) => {
     setError(null);
     setLoadingExample(example.file);
     try {
@@ -285,24 +307,29 @@ export default function AnalysisPage() {
 
             <div className="nt-examples">
               <div className="nt-examples__title">Ou comece com um exemplo</div>
-              <div className="nt-examples__grid">
-                {EXAMPLE_LOGS.map((example) => (
-                  <button
-                    key={example.file}
-                    type="button"
-                    className="nt-example"
-                    disabled={loadingExample !== null}
-                    aria-busy={loadingExample === example.file}
-                    onClick={() => loadExample(example)}
-                  >
-                    <span className="nt-example__name">{example.name}</span>
-                    <span className="nt-example__desc">{example.description}</span>
-                    <span className="nt-example__cta" aria-hidden>
-                      {loadingExample === example.file ? "Carregando…" : "Abrir exemplo →"}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              {EXAMPLE_SECTIONS.map((section) => (
+                <section key={section.title} className="nt-examples__section">
+                  <h3 className="nt-examples__section-title">{section.title}</h3>
+                  <div className="nt-examples__grid">
+                    {section.logs.map((example) => (
+                      <button
+                        key={example.file}
+                        type="button"
+                        className="nt-example"
+                        disabled={loadingExample !== null}
+                        aria-busy={loadingExample === example.file}
+                        onClick={() => loadExample(example)}
+                      >
+                        <span className="nt-example__name">{example.name}</span>
+                        <span className="nt-example__desc">{example.description}</span>
+                        <span className="nt-example__cta" aria-hidden>
+                          {loadingExample === example.file ? "Carregando…" : "Abrir exemplo →"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
           </>
         )}
