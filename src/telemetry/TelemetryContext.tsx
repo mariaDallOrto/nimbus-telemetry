@@ -26,6 +26,7 @@ export type LiveBuffers = {
   labels: string[];
   stick: number[];
   current: number[];
+  currentPeak: number[];
   rpm: number[];
 };
 
@@ -64,7 +65,7 @@ function readInitialConfig(): MotorConfig {
 }
 
 function emptyBuffers(): LiveBuffers {
-  return { labels: [], stick: [], current: [], rpm: [] };
+  return { labels: [], stick: [], current: [], currentPeak: [], rpm: [] };
 }
 
 function pushCapped(buffer: number[], value: number): void {
@@ -107,6 +108,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     const rpm = estimateRpm(sample, configRef.current);
     pushCapped(buffers.stick, sample.stickPct);
     pushCapped(buffers.current, sample.current);
+    pushCapped(buffers.currentPeak, sample.currentPeak ?? sample.current);
     pushCapped(buffers.rpm, rpm);
     buffers.labels.push(new Date().toLocaleTimeString("pt-BR"));
     if (buffers.labels.length > MAX_SAMPLES) buffers.labels.shift();

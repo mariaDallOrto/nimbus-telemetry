@@ -13,8 +13,10 @@ export type TelemetrySample = {
   stickPct: number;
   /** Pack voltage in volts (firmware `vTotal`). */
   voltage: number;
-  /** Motor current in amps. */
+  /** Motor current in amps (mean of the firmware sampling window). */
   current: number;
+  /** Highest instantaneous current in the window; null when the frame omits it. */
+  currentPeak: number | null;
   /** Per-cell voltages; null for cells the frame omitted. */
   cells: Record<CellKey, number | null>;
 };

@@ -21,6 +21,21 @@ describe("parseTelemetryMessage", () => {
     expect(message.sample.rssi).toBeNull();
   });
 
+  test("keeps mean current and peak current separate", () => {
+    const message = parseTelemetryMessage(
+      JSON.stringify({ pwmVal: 0, vTotal: 16, current: 1.2, currentPeak: 7.9 }),
+    );
+    if (message?.kind !== "sample") throw new Error("expected sample");
+    expect(message.sample.current).toBe(1.2);
+    expect(message.sample.currentPeak).toBe(7.9);
+  });
+
+  test("leaves peak current null when the frame omits it", () => {
+    const message = parseTelemetryMessage(JSON.stringify({ pwmVal: 0, vTotal: 16, current: 1.2 }));
+    if (message?.kind !== "sample") throw new Error("expected sample");
+    expect(message.sample.currentPeak).toBeNull();
+  });
+
   test("parses a STATUS frame", () => {
     const message = parseTelemetryMessage(
       JSON.stringify({ type: "STATUS", recState: "STARTED", file: "log1.csv", rxMode: "BI" }),

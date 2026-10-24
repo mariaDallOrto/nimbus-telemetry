@@ -54,6 +54,7 @@ export function parseTelemetryMessage(raw: string): TelemetryMessage | null {
     stickPct,
     voltage,
     current,
+    currentPeak: asNumber(frame["currentPeak"]),
     cells: readCells(frame),
   };
   return { kind: "sample", sample };

@@ -15,6 +15,7 @@ type ComboChartProps = {
   labels: readonly string[];
   stick: readonly (number | null)[];
   current: readonly (number | null)[];
+  currentPeak: readonly (number | null)[];
   rpm: readonly (number | null)[];
   currentBounds: AxisBounds | null;
   rpmBounds: AxisBounds | null;
@@ -25,6 +26,7 @@ export function ComboChart({
   labels,
   stick,
   current,
+  currentPeak,
   rpm,
   currentBounds,
   rpmBounds,
@@ -54,6 +56,16 @@ export function ComboChart({
           spanGaps: true,
         },
         {
+          label: "Corrente pico (A)",
+          data: [...currentPeak],
+          borderColor: `${CHART_COLOR_CURRENT}80`,
+          yAxisID: "yCurrent",
+          pointRadius: 0,
+          borderWidth: 1,
+          hidden: true,
+          spanGaps: true,
+        },
+        {
           label: "RPM",
           data: [...rpm],
           borderColor: CHART_COLOR_RPM,
@@ -65,7 +77,7 @@ export function ComboChart({
         },
       ],
     }),
-    [labels, stick, current, rpm],
+    [labels, stick, current, currentPeak, rpm],
   );
 
   const options = useMemo<ChartOptions<"line">>(

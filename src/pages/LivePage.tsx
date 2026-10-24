@@ -66,6 +66,7 @@ export default function LivePage() {
     const labels = tail(buffers.labels, visibleWindow);
     const stick = movingAverage(tail(buffers.stick, visibleWindow), maStick);
     const current = movingAverage(tail(buffers.current, visibleWindow), maCurrent);
+    const currentPeak = tail(buffers.currentPeak, visibleWindow);
     const rpm = movingAverage(tail(buffers.rpm, visibleWindow), maRpm);
     currentBoundsRef.current = stickyBounds(currentBoundsRef.current, current);
     rpmBoundsRef.current = stickyBounds(rpmBoundsRef.current, rpm);
@@ -73,6 +74,7 @@ export default function LivePage() {
       labels,
       stick,
       current,
+      currentPeak,
       rpm,
       lastStick: lastNumber(stick),
       lastCurrent: lastNumber(current),
@@ -179,6 +181,7 @@ export default function LivePage() {
                 labels={chart.labels}
                 stick={chart.stick}
                 current={chart.current}
+                currentPeak={chart.currentPeak}
                 rpm={chart.rpm}
                 currentBounds={currentBoundsRef.current}
                 rpmBounds={rpmBoundsRef.current}
