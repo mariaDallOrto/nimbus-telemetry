@@ -7,6 +7,7 @@ export const CHART_COLOR_CLAMP = "#ffe14d";
 export const CHART_COLOR_RPM = "#ff9f45";
 export const CHART_COLOR_VOLTAGE = "#34d399";
 export const CHART_COLOR_RSSI = "#5ea8ff";
+export const CHART_COLOR_ENERGY = "#5ea8ff";
 
 export const CHART_COLOR_TEXT_SOFT = "#a8a8a8";
 export const CHART_COLOR_GRID_LINE = "#2e2e2e";

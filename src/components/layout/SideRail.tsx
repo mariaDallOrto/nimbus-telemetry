@@ -9,6 +9,7 @@ type RailLink = { to: string; icon: string; label: string };
 const NAV_LINKS: readonly RailLink[] = [
   { to: "/", icon: "📡", label: "Monitoramento ao Vivo" },
   { to: "/analise", icon: "📈", label: "Análise de CSV" },
+  { to: "/energia", icon: "⚡", label: "Energia da arma" },
 ];
 
 export function SideRail() {
