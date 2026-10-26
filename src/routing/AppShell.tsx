@@ -7,6 +7,7 @@ import { TelemetryProvider } from "../telemetry/TelemetryContext";
 
 const LivePage = lazy(() => import("../pages/LivePage"));
 const AnalysisPage = lazy(() => import("../pages/AnalysisPage"));
+const EnergyPage = lazy(() => import("../pages/EnergyPage"));
 
 function PendingShell() {
   return (
@@ -43,6 +44,7 @@ function ShellLayout() {
           <Routes>
             <Route path="/" element={<LivePage />} />
             <Route path="/analise" element={<AnalysisPage />} />
+            <Route path="/energia" element={<EnergyPage />} />
           </Routes>
         </Suspense>
       </div>
