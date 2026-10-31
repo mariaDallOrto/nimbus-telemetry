@@ -104,6 +104,7 @@ const uint32_t SERIAL_BAUD        = 115200;
 const size_t   SERIAL_TX_BUFFER_BYTES = 2048;  // sem buffer, cada JSON trava o loop por ~25ms
 const size_t   SERIAL_COMMAND_MAX_CHARS = 32;
 const size_t   WS_COMMAND_QUEUE_LENGTH  = 8;
+const uint32_t CALIBRATION_REPEAT_GUARD_MS = 1000;
 const uint32_t PWM_TIMEOUT_MS     = 50;     // sem edge => sinal perdido
 
 // SD: clock SPI conservador (jumper/protoboard nao aguenta os 40MHz padrao)
@@ -150,6 +151,7 @@ bool       serialStreamOn = true;
 // a unica task que toca no SD e na Serial.
 struct WsCommand { char text[SERIAL_COMMAND_MAX_CHARS + 1]; uint32_t clientId; };
 QueueHandle_t wsCommands = nullptr;
+uint32_t   lastCalibrationMs = 0;
 float      currentZeroOffsetA = 0;   // calibrado via comando 'c', persistido em NVS
 Preferences calibrationStore;
 
@@ -226,7 +228,8 @@ void broadcast(const String& message) {
 String statusJson(const String& file) {
   return "{\"type\":\"STATUS\", \"recState\":\"" + String(isRecording ? "STARTED" : "STOPPED") + "\""
        + ", \"file\":\"" + file + "\""
-       + ", \"rxMode\":\"" + String(tipoSinal == UNIDIRECIONAL ? "UNIDIRECIONAL" : "BIDIRECIONAL") + "\"}";
+       + ", \"rxMode\":\"" + String(tipoSinal == UNIDIRECIONAL ? "UNIDIRECIONAL" : "BIDIRECIONAL") + "\""
+       + ", \"currentZeroA\":" + String(currentZeroOffsetA, 3) + "}";
 }
 
 // =========================================================
@@ -452,6 +455,9 @@ void calibrateCurrentZero() {
   calibrationStore.putFloat("zeroA", currentZeroOffsetA);
   calibrationStore.end();
   Serial.printf("[CAL] Offset = %.3fA (salvo em NVS, sera subtraido de todas as leituras)\n", currentZeroOffsetA);
+  lastCalibrationMs = millis();
+  broadcast("{\"type\":\"CALIBRATION\"}");
+  broadcast(statusJson(currentLogFile));
 }
 
 void handleSerialKey(char c) {
@@ -760,6 +766,15 @@ void handleCommand(const String& msg, uint32_t clientId) {
   else if (msg == "SET_RX_BI") {
     tipoSinal = BIDIRECIONAL;
     broadcast(statusJson(currentLogFile));
+  }
+  else if (msg == "CALIBRATE_ZERO") {
+    // Offset novo no meio do log quebraria a escala. O repeat guard cobre o envio pelos dois canais.
+    bool isRepeat = lastCalibrationMs != 0 && millis() - lastCalibrationMs < CALIBRATION_REPEAT_GUARD_MS;
+    if (isRecording) {
+      LOG_WARN(F("Calibracao recusada durante gravacao"));
+    } else if (!isRepeat) {
+      calibrateCurrentZero();
+    }
   }
   else if (msg == "GET_STATUS") {
     broadcast(statusJson(currentLogFile));
