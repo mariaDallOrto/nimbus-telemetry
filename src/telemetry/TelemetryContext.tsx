@@ -8,9 +8,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createLogStore, type SavedLog } from "./logStore";
 import { estimateRpm } from "./rpm";
 import { parseTelemetryMessage } from "./parseMessage";
-import type { ConnectionStatus, MotorConfig, RecordingStatus, TelemetrySample } from "./types";
+import { createSessionRecorder } from "./sessionRecorder";
+import { useSerialConnection } from "./useSerialConnection";
+import type {
+  ConnectionStatus,
+  MotorConfig,
+  RecordingStatus,
+  TelemetryLink,
+  TelemetrySample,
+} from "./types";
 
 const STORAGE_KEYS = {
   ip: "esp32_ip",
@@ -20,6 +29,8 @@ const STORAGE_KEYS = {
 } as const;
 const RECONNECT_DELAY_MS = 2000;
 const MAX_SAMPLES = 2000;
+/** WiFi feeds the live view only after Serial stays silent this long. */
+const SERIAL_LIVE_WINDOW_MS = 500;
 
 /** Rolling, fixed-capacity buffers feeding the live chart. */
 export type LiveBuffers = {
@@ -30,8 +41,14 @@ export type LiveBuffers = {
   rpm: number[];
 };
 
+export type BrowserRecording = {
+  isActive: boolean;
+  samples: Record<TelemetryLink, number>;
+};
+
 type TelemetryContextValue = {
   status: ConnectionStatus;
+  serialStatus: ConnectionStatus;
   config: MotorConfig;
   setConfig: (patch: Partial<MotorConfig>) => void;
   recording: RecordingStatus | null;
@@ -41,7 +58,16 @@ type TelemetryContextValue = {
   sampleVersion: number;
   connect: () => void;
   disconnect: () => void;
+  connectSerial: () => Promise<void>;
+  disconnectSerial: () => Promise<void>;
   sendCommand: (command: string) => void;
+  browserRecording: BrowserRecording;
+  startRecording: () => void;
+  stopRecording: () => Promise<void>;
+  savedLogs: SavedLog[];
+  downloadSavedLog: (fileName: string) => Promise<void>;
+  deleteSavedLog: (fileName: string) => Promise<void>;
+  logStoreFailed: boolean;
 };
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -73,17 +99,38 @@ function pushCapped(buffer: number[], value: number): void {
   if (buffer.length > MAX_SAMPLES) buffer.shift();
 }
 
+function downloadTextFile(fileName: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+const logStore = createLogStore();
+
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [config, setConfigState] = useState<MotorConfig>(readInitialConfig);
   const [status, setStatus] = useState<ConnectionStatus>("offline");
   const [recording, setRecording] = useState<RecordingStatus | null>(null);
   const [lastSample, setLastSample] = useState<TelemetrySample | null>(null);
   const [sampleVersion, setSampleVersion] = useState(0);
+  const [savedLogs, setSavedLogs] = useState<SavedLog[]>([]);
+  const [isBrowserRecording, setIsBrowserRecording] = useState(false);
+  const [logStoreFailed, setLogStoreFailed] = useState(false);
 
   const buffersRef = useRef<LiveBuffers>(emptyBuffers());
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalCloseRef = useRef(false);
+  const lastSerialSampleAtRef = useRef(0);
+  const [recorder] = useState(() =>
+    createSessionRecorder(logStore, (cause) => {
+      console.error("Log store write failed", cause);
+      setLogStoreFailed(true);
+    }),
+  );
   // Keep the latest config readable inside socket callbacks without
   // re-subscribing the WebSocket on every keystroke.
   const configRef = useRef(config);
@@ -103,7 +150,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const handleSample = useCallback((sample: TelemetrySample) => {
+  const showSample = useCallback((sample: TelemetrySample) => {
     const buffers = buffersRef.current;
     const rpm = estimateRpm(sample, configRef.current);
     pushCapped(buffers.stick, sample.stickPct);
@@ -114,6 +161,39 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     if (buffers.labels.length > MAX_SAMPLES) buffers.labels.shift();
     setLastSample(sample);
     setSampleVersion((version) => version + 1);
+  }, []);
+
+  const handleFrame = useCallback(
+    (link: TelemetryLink, raw: string) => {
+      const message = parseTelemetryMessage(raw);
+      if (!message) return;
+      if (message.kind === "status") {
+        setRecording(message.status);
+        return;
+      }
+      const receivedAt = new Date();
+      recorder.record(link, message.sample, receivedAt);
+      if (link === "serial") lastSerialSampleAtRef.current = receivedAt.getTime();
+      const serialIsLive =
+        receivedAt.getTime() - lastSerialSampleAtRef.current < SERIAL_LIVE_WINDOW_MS;
+      if (link === "serial" || !serialIsLive) showSample(message.sample);
+    },
+    [recorder, showSample],
+  );
+
+  const serial = useSerialConnection(
+    (line) => handleFrame("serial", line),
+    () => recorder.flushLink("serial"),
+  );
+  const sendSerialCommand = serial.send;
+
+  const refreshSavedLogs = useCallback(async () => {
+    try {
+      setSavedLogs(await logStore.list());
+    } catch (cause) {
+      console.error("Log store read failed", cause);
+      setLogStoreFailed(true);
+    }
   }, []);
 
   const connect = useCallback(() => {
@@ -130,16 +210,12 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
     socket.onopen = () => setStatus("online");
     socket.onmessage = (event) => {
-      const message = parseTelemetryMessage(String(event.data));
-      if (!message) return;
-      if (message.kind === "status") {
-        setRecording(message.status);
-        return;
-      }
-      handleSample(message.sample);
+      if (socketRef.current === socket) handleFrame("wifi", String(event.data));
     };
     socket.onclose = () => {
+      if (socketRef.current !== socket) return;
       socketRef.current = null;
+      recorder.flushLink("wifi");
       if (intentionalCloseRef.current) {
         setStatus("offline");
         return;
@@ -147,7 +223,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       setStatus("reconnecting");
       reconnectRef.current = setTimeout(() => connect(), RECONNECT_DELAY_MS);
     };
-  }, [handleSample]);
+  }, [handleFrame, recorder]);
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;
@@ -157,10 +233,52 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     setStatus("offline");
   }, []);
 
-  const sendCommand = useCallback((command: string) => {
-    const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(command);
+  const sendCommand = useCallback(
+    (command: string) => {
+      const socket = socketRef.current;
+      // Both links: a half-open socket still reports OPEN, and the firmware ignores repeats.
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(command);
+      sendSerialCommand(command);
+    },
+    [sendSerialCommand],
+  );
+
+  const startRecording = useCallback(() => {
+    recorder.start(new Date());
+    setIsBrowserRecording(true);
+    sendCommand("START_RECORD");
+  }, [recorder, sendCommand]);
+
+  const stopRecording = useCallback(async () => {
+    sendCommand("STOP_RECORD");
+    const files = await recorder.stop();
+    setIsBrowserRecording(false);
+    for (const file of files) downloadTextFile(file.fileName, file.text);
+    await refreshSavedLogs();
+  }, [recorder, refreshSavedLogs, sendCommand]);
+
+  const downloadSavedLog = useCallback(async (fileName: string) => {
+    downloadTextFile(fileName, await logStore.read(fileName));
   }, []);
+
+  const deleteSavedLog = useCallback(
+    async (fileName: string) => {
+      await logStore.remove(fileName);
+      await refreshSavedLogs();
+    },
+    [refreshSavedLogs],
+  );
+
+  useEffect(() => {
+    void refreshSavedLogs();
+  }, [refreshSavedLogs]);
+
+  useEffect(() => {
+    if (!isBrowserRecording) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => event.preventDefault();
+    globalThis.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => globalThis.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [isBrowserRecording]);
 
   useEffect(() => {
     return () => {
@@ -173,6 +291,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const value = useMemo<TelemetryContextValue>(
     () => ({
       status,
+      serialStatus: serial.status,
       config,
       setConfig,
       recording,
@@ -181,10 +300,25 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       sampleVersion,
       connect,
       disconnect,
+      connectSerial: serial.connect,
+      disconnectSerial: serial.disconnect,
       sendCommand,
+      browserRecording: {
+        isActive: isBrowserRecording,
+        samples: { wifi: recorder.sampleCount("wifi"), serial: recorder.sampleCount("serial") },
+      },
+      startRecording,
+      stopRecording,
+      savedLogs,
+      downloadSavedLog,
+      deleteSavedLog,
+      logStoreFailed,
     }),
     [
       status,
+      serial.status,
+      serial.connect,
+      serial.disconnect,
       config,
       setConfig,
       recording,
@@ -193,6 +327,14 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       connect,
       disconnect,
       sendCommand,
+      recorder,
+      isBrowserRecording,
+      startRecording,
+      stopRecording,
+      savedLogs,
+      downloadSavedLog,
+      deleteSavedLog,
+      logStoreFailed,
     ],
   );
 

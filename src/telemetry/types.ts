@@ -1,13 +1,18 @@
 // Domain types for the ESP32 telemetry link (R84 receiver + HSTS016L ESC).
-// The firmware streams two JSON shapes over the WebSocket: periodic samples
+// The firmware streams two JSON shapes over WebSocket and Serial: periodic samples
 // and recording/receiver STATUS frames. We normalize both into typed values
 // at the edge (see parseTelemetryMessage) so the UI never touches `unknown`.
 
 export const CELL_KEYS = ["c1", "c2", "c3", "c4", "c5", "c6"] as const;
 export type CellKey = (typeof CELL_KEYS)[number];
 
+/** Channel a frame arrived through. Each one records its own log file. */
+export type TelemetryLink = "wifi" | "serial";
+
 /** A single normalized telemetry reading. `rssi` is null when absent. */
 export type TelemetrySample = {
+  /** Firmware packet counter; gaps reveal samples lost on a link. */
+  packetId: number | null;
   rssi: number | null;
   /** Throttle stick command, percent (firmware `pwmVal`). */
   stickPct: number;
@@ -17,6 +22,14 @@ export type TelemetrySample = {
   current: number;
   /** Highest instantaneous current in the window; null when the frame omits it. */
   currentPeak: number | null;
+  /** Lowest instantaneous current in the window. */
+  currentMin: number | null;
+  /** Cells the firmware detected in the pack. */
+  nCells: number | null;
+  /** Firmware time spent reading sensors for this sample. */
+  loopMs: number | null;
+  /** Time since the last receiver PWM edge. */
+  pwmAgeMs: number | null;
   /** Per-cell voltages; null for cells the frame omitted. */
   cells: Record<CellKey, number | null>;
 };

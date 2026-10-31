@@ -18,6 +18,7 @@ import {
 } from "../charts/chartColors";
 import { stickyBounds, type AxisBounds } from "../telemetry/axis";
 import { movingAverage } from "../telemetry/movingAverage";
+import { isSerialSupported } from "../telemetry/serialLink";
 import { useTelemetry } from "../telemetry/TelemetryContext";
 import { fixedOrDash, intOrDash, lastNumber, tail } from "../ui/format";
 
@@ -28,9 +29,14 @@ function isValidHost(ip: string): boolean {
   return trimmed.length > 0 && !/\s/.test(trimmed);
 }
 
+function formatKilobytes(characters: number): string {
+  return `${(characters / 1024).toFixed(0)} KB`;
+}
+
 export default function LivePage() {
   const {
     status,
+    serialStatus,
     config,
     setConfig,
     recording,
@@ -39,7 +45,16 @@ export default function LivePage() {
     sampleVersion,
     connect,
     disconnect,
+    connectSerial,
+    disconnectSerial,
     sendCommand,
+    browserRecording,
+    startRecording,
+    stopRecording,
+    savedLogs,
+    downloadSavedLog,
+    deleteSavedLog,
+    logStoreFailed,
   } = useTelemetry();
 
   const [maStick, setMaStick] = useState(1);
@@ -50,10 +65,15 @@ export default function LivePage() {
   const currentBoundsRef = useRef<AxisBounds | null>(null);
   const rpmBoundsRef = useRef<AxisBounds | null>(null);
 
-  const isOnline = status === "online";
-  const isConnecting = status === "connecting" || status === "reconnecting";
+  const isWifiOnline = status === "online";
+  const isSerialOnline = serialStatus === "online";
+  const isOnline = isWifiOnline || isSerialOnline;
+  const isWifiConnecting = status === "connecting" || status === "reconnecting";
+  const isSerialConnecting = serialStatus === "connecting" || serialStatus === "reconnecting";
   const ipValid = isValidHost(config.ip);
-  const isRecording = recording?.phase === "started";
+  const isSdRecording = recording?.phase === "started";
+  const isRecording = browserRecording.isActive || isSdRecording;
+  const sdFailed = recording?.file === SD_ERROR_MARKER;
   const downloadFile =
     recording?.phase === "stopped" && recording.file && recording.file !== SD_ERROR_MARKER
       ? recording.file
@@ -88,6 +108,10 @@ export default function LivePage() {
     connect();
   };
 
+  const handleSerialConnect = () => {
+    connectSerial().catch((cause: unknown) => console.warn("Serial port not selected", cause));
+  };
+
   return (
     <main className="nb-main">
       <div className="nb-content">
@@ -99,43 +123,75 @@ export default function LivePage() {
             </div>
             <h1 className="nb-hero__title">Telemetria ao Vivo</h1>
             <p className="nb-hero__lede">
-              Acompanhe stick, corrente e RPM estimado em tempo real, grave logs no cartão SD e
-              ajuste o receptor — tudo pela conexão WebSocket com o ESP32.
+              Acompanhe stick, corrente e RPM estimado em tempo real, grave logs pelo WiFi, pela
+              serial e no cartão SD ao mesmo tempo e ajuste o receptor.
             </p>
           </div>
           <div className="nb-hero__aside">
-            <ConnectionStatusBadge status={status} />
+            <ConnectionStatusBadge status={status} linkLabel="WiFi" />
+            <ConnectionStatusBadge status={serialStatus} linkLabel="Serial" />
           </div>
         </header>
 
-        <Card
-          heading="Conexão"
-          action={
-            isOnline || isConnecting ? (
-              <Button variant="danger" onClick={disconnect}>
-                Desconectar
-              </Button>
+        <div className="nb-grid nb-grid--2">
+          <Card
+            heading="Conexão WiFi"
+            action={
+              isWifiOnline || isWifiConnecting ? (
+                <Button variant="danger" onClick={disconnect}>
+                  Desconectar
+                </Button>
+              ) : (
+                <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
+                  Conectar
+                </Button>
+              )
+            }
+          >
+            <div className="nt-connect">
+              <Field
+                label="IP do ESP32"
+                inputMode="decimal"
+                placeholder="192.168.4.1"
+                value={config.ip}
+                invalid={config.ip.length > 0 && !ipValid}
+                hint={
+                  config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
+                }
+                onChange={(event) => setConfig({ ip: event.target.value })}
+              />
+            </div>
+          </Card>
+
+          <Card
+            heading="Conexão serial"
+            action={
+              isSerialOnline || isSerialConnecting ? (
+                <Button variant="danger" onClick={() => void disconnectSerial()}>
+                  Desconectar
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  onClick={handleSerialConnect}
+                  disabled={!isSerialSupported()}
+                >
+                  Conectar
+                </Button>
+              )
+            }
+          >
+            {isSerialSupported() ? (
+              <p className="nb-section__subtitle">
+                Ligue o ESP32 no USB e escolha a porta. Reconecta sozinho se o cabo cair.
+              </p>
             ) : (
-              <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
-                Conectar
-              </Button>
-            )
-          }
-        >
-          <div className="nt-connect">
-            <Field
-              label="IP do ESP32"
-              inputMode="decimal"
-              placeholder="192.168.4.1"
-              value={config.ip}
-              invalid={config.ip.length > 0 && !ipValid}
-              hint={
-                config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
-              }
-              onChange={(event) => setConfig({ ip: event.target.value })}
-            />
-          </div>
-        </Card>
+              <Alert variant="warning">
+                Este navegador não tem Web Serial. Use Chrome, Edge ou Chromium em localhost.
+              </Alert>
+            )}
+          </Card>
+        </div>
 
         <Card
           heading="Parâmetros do motor"
@@ -253,20 +309,18 @@ export default function LivePage() {
           {!isOnline ? (
             <div style={{ marginBottom: 16 }}>
               <Alert variant="warning">
-                Conecte ao ESP32 para gravar logs e configurar o receptor.
+                Conecte ao ESP32 por WiFi ou serial para gravar logs e configurar o receptor.
               </Alert>
             </div>
           ) : null}
           <div className="nb-grid nb-grid--2">
-            <Card heading="Gravação (SD)">
+            <Card heading="Gravação">
               <div className="nt-record">
                 <div className="nt-record__status">
                   {isRecording ? (
                     <>
                       <span className="nt-rec-dot" aria-hidden />
-                      <span>
-                        Gravando · <span className="nt-record__file">{recording?.file}</span>
-                      </span>
+                      <span>Gravando</span>
                     </>
                   ) : (
                     <span>
@@ -274,18 +328,41 @@ export default function LivePage() {
                     </span>
                   )}
                 </div>
+                {isRecording ? (
+                  <dl className="nt-record__targets">
+                    <dt>WiFi</dt>
+                    <dd>{browserRecording.samples.wifi} amostras</dd>
+                    <dt>Serial</dt>
+                    <dd>{browserRecording.samples.serial} amostras</dd>
+                    <dt>Cartão SD</dt>
+                    <dd className="nt-record__file">
+                      {isSdRecording ? recording?.file : "sem gravação"}
+                    </dd>
+                  </dl>
+                ) : null}
+                {sdFailed ? (
+                  <Alert variant="warning">
+                    Cartão SD falhou. WiFi e serial seguem salvando no navegador.
+                  </Alert>
+                ) : null}
+                {logStoreFailed ? (
+                  <Alert variant="warning">
+                    O navegador não conseguiu salvar no disco. Não feche a aba: os arquivos ainda
+                    baixam ao parar a gravação.
+                  </Alert>
+                ) : null}
                 <div className="nt-record__buttons">
                   <Button
                     variant="success"
                     disabled={!isOnline || isRecording}
-                    onClick={() => sendCommand("START_RECORD")}
+                    onClick={startRecording}
                   >
                     Iniciar
                   </Button>
                   <Button
                     variant="danger"
-                    disabled={!isOnline || !isRecording}
-                    onClick={() => sendCommand("STOP_RECORD")}
+                    disabled={!isRecording}
+                    onClick={() => void stopRecording()}
                   >
                     Parar
                   </Button>
@@ -302,7 +379,7 @@ export default function LivePage() {
                       )
                     }
                   >
-                    ⤓ Baixar {downloadFile}
+                    ⤓ Baixar do SD {downloadFile}
                   </Button>
                 ) : null}
               </div>
@@ -336,6 +413,36 @@ export default function LivePage() {
               </div>
             </Card>
           </div>
+        </Section>
+
+        <Section title="Logs salvos" eyebrow="WiFi · Serial">
+          <Card>
+            {savedLogs.length === 0 ? (
+              <p className="nb-section__subtitle">
+                Nenhum log salvo. O botão Iniciar grava um CSV do WiFi e um da serial, que ficam
+                aqui até você excluir.
+              </p>
+            ) : (
+              <ul className="nt-saved-logs">
+                {savedLogs.map((log) => (
+                  <li key={log.fileName} className="nt-saved-logs__row">
+                    <span className="nt-record__file">{log.fileName}</span>
+                    <span className="nb-section__subtitle">{formatKilobytes(log.characters)}</span>
+                    <Button variant="secondary" onClick={() => void downloadSavedLog(log.fileName)}>
+                      Baixar
+                    </Button>
+                    <Button
+                      variant="danger"
+                      aria-label={`Excluir ${log.fileName}`}
+                      onClick={() => void deleteSavedLog(log.fileName)}
+                    >
+                      Excluir
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
         </Section>
 
         <Section title="Células da bateria" eyebrow="Tensão por célula">

@@ -1125,6 +1125,31 @@ button {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+.nt-record__targets {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-soft);
+}
+.nt-record__targets dd {
+  margin: 0;
+}
+.nt-saved-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nt-saved-logs__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 12px;
+}
 .nt-rec-dot {
   width: 9px;
   height: 9px;

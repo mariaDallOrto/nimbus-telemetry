@@ -15,7 +15,7 @@ const NAV_LINKS: readonly RailLink[] = [
 export function SideRail() {
   const navigate = useNavigate();
   const { collapsed, toggle, drawerOpen, closeDrawer } = useSidebar();
-  const { status } = useTelemetry();
+  const { status, serialStatus } = useTelemetry();
   const railRef = useRef<HTMLElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
@@ -97,7 +97,8 @@ export function SideRail() {
       </nav>
 
       <div className="nb-rail__footer">
-        <ConnectionStatusBadge status={status} />
+        <ConnectionStatusBadge status={status} linkLabel="WiFi" />
+        <ConnectionStatusBadge status={serialStatus} linkLabel="Serial" />
       </div>
     </aside>
   );

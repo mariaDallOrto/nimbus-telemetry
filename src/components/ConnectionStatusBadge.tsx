@@ -9,20 +9,27 @@ const STATUS_LABEL: Record<ConnectionStatus, string> = {
 
 type ConnectionStatusBadgeProps = {
   status: ConnectionStatus;
+  /** Names the link when several are shown side by side. */
+  linkLabel?: string;
   /** Compact variant used inside the sidebar footer. */
   compact?: boolean;
 };
 
-export function ConnectionStatusBadge({ status, compact = false }: ConnectionStatusBadgeProps) {
+export function ConnectionStatusBadge({
+  status,
+  linkLabel,
+  compact = false,
+}: ConnectionStatusBadgeProps) {
+  const label = linkLabel ? `${linkLabel}: ${STATUS_LABEL[status]}` : STATUS_LABEL[status];
   return (
     <span
       className={`nt-status${compact ? " nt-status--sm" : ""}`}
       data-state={status}
       role="status"
-      aria-label={`Conexão: ${STATUS_LABEL[status]}`}
+      aria-label={`Conexão: ${label}`}
     >
       <span className="nt-status__dot" aria-hidden />
-      {STATUS_LABEL[status]}
+      {label}
     </span>
   );
 }

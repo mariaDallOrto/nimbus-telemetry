@@ -7,7 +7,7 @@ Este projeto consiste em um sistema não invasivo de telemetria para robôs de c
 - **Monitoramento de Bateria (6S):** Leitura individual de células de baterias LiPo (1S a 6S) utilizando dois módulos ADS1115 para alta precisão.
 - **Sensor de Corrente:** Suporte ao sensor Hall HSTS016L-A (com leitura diferencial VREF/VOUT).
 - **Leitura de PWM:** Monitoramento do sinal do receptor (Canal R84) para identificar a posição do stick/acelerador.
-- **Data Logging (Cartão SD):** Gravação de logs em formato `.CSV` no cartão SD para análise posterior.
+- **Data Logging redundante:** Cada gravação salva até três cópias em `.CSV`: cartão SD, arquivo do WiFi e arquivo da serial. Se o SD falhar, os outros dois seguem gravando.
 - **Web Dashboard (WebSocket):** Interface HTML5 moderna (sem necessidade de internet) para:
 - Visualização de gráficos ao vivo (Corrente, Tensão, RPM estimado, Stick).
 - Controle de gravação (Iniciar/Parar).
@@ -129,11 +129,19 @@ bun run verify   # portão único: tsc + oxlint + knip + bun test + oxfmt
 1. **Monitoramento:** "Monitoramento ao Vivo" mostra leituras, gráfico combinado
    (stick · corrente · RPM) com média móvel por linha e janela visível ajustável,
    além das tensões por célula.
-2. **Gravação:** clique em **Iniciar** para gravar no cartão SD — um indicador
-   pisca durante a gravação. Os controles ficam desabilitados enquanto offline
-   (prevenção de erro).
-3. **Download:** ao parar, o botão **Baixar CSV** aparece se o arquivo foi gerado.
-4. **Análise:** em "Análise de CSV", arraste ou selecione o `.csv` baixado para
+2. **Conexão serial:** rode `bun dev` e abra `http://localhost:5174` no Chrome,
+   Edge ou Chromium (Web Serial exige isso). Ligue o ESP32 no USB, clique em
+   **Conectar** e escolha a porta. WiFi e serial funcionam ao mesmo tempo, e o
+   gráfico prefere a serial. Feche o Monitor Serial antes: só um programa abre a
+   porta. No monitor, `t` liga e desliga o stream de telemetria.
+3. **Gravação:** clique em **Iniciar**. O app grava um CSV por canal
+   (`<data>-wifi.csv` e `<data>-serial.csv`) e manda o ESP32 gravar no SD. Basta
+   um canal conectado. Os arquivos vão para o disco do navegador a cada segundo,
+   então sobrevivem a aba fechada ou travada.
+4. **Download:** ao parar, os dois CSVs baixam sozinhos e continuam em **Logs
+   salvos** até você excluir. O botão **Baixar do SD** aparece se o arquivo foi
+   gerado no cartão.
+5. **Análise:** em "Análise de CSV", arraste ou selecione o `.csv` baixado para
    montar gráficos personalizados, suavizar séries e inspecionar os dados brutos.
    Funciona de forma independente, sem precisar estar conectado à ESP32.
 

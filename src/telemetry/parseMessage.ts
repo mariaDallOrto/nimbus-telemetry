@@ -15,9 +15,9 @@ function readCells(frame: Record<string, unknown>): Record<CellKey, number | nul
 }
 
 /**
- * Normalize one raw WebSocket payload into a typed message.
- * Returns null for malformed frames (caller ignores them) so a single bad
- * packet never crashes the live view.
+ * Normalize one raw WebSocket or Serial line into a typed message.
+ * Returns null for malformed frames and plain firmware log lines (caller
+ * ignores them) so a single bad packet never crashes the live view.
  */
 export function parseTelemetryMessage(raw: string): TelemetryMessage | null {
   let parsed: unknown;
@@ -50,11 +50,16 @@ export function parseTelemetryMessage(raw: string): TelemetryMessage | null {
   if (voltage === null || current === null || stickPct === null) return null;
 
   const sample: TelemetrySample = {
+    packetId: asNumber(frame["id"]),
     rssi: asNumber(frame["rssi"]),
     stickPct,
     voltage,
     current,
     currentPeak: asNumber(frame["currentPeak"]),
+    currentMin: asNumber(frame["currentMin"]),
+    nCells: asNumber(frame["nCells"]),
+    loopMs: asNumber(frame["loopMs"]),
+    pwmAgeMs: asNumber(frame["pwmAgeMs"]),
     cells: readCells(frame),
   };
   return { kind: "sample", sample };
