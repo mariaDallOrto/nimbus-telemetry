@@ -97,8 +97,8 @@ export function SideRail() {
       </nav>
 
       <div className="nb-rail__footer">
-        <ConnectionStatusBadge status={status} linkLabel="WiFi" />
-        <ConnectionStatusBadge status={serialStatus} linkLabel="Serial" />
+        <ConnectionStatusBadge status={status} linkLabel="WiFi" compact />
+        <ConnectionStatusBadge status={serialStatus} linkLabel="Serial" compact />
       </div>
     </aside>
   );

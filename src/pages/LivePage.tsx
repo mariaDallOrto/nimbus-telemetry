@@ -20,9 +20,17 @@ import { stickyBounds, type AxisBounds } from "../telemetry/axis";
 import { movingAverage } from "../telemetry/movingAverage";
 import { isSerialSupported } from "../telemetry/serialLink";
 import { useTelemetry } from "../telemetry/TelemetryContext";
+import type { ConnectionStatus } from "../telemetry/types";
 import { fixedOrDash, intOrDash, lastNumber, tail } from "../ui/format";
 
 const SD_ERROR_MARKER = "ERRO_SD";
+
+const SERIAL_PORT_STATE: Record<ConnectionStatus, string> = {
+  offline: "Ligue o ESP32 no USB e escolha a porta",
+  connecting: "Abrindo a porta",
+  online: "Porta conectada",
+  reconnecting: "Procurando o cabo",
+};
 
 function isValidHost(ip: string): boolean {
   const trimmed = ip.trim();
@@ -31,6 +39,10 @@ function isValidHost(ip: string): boolean {
 
 function formatKilobytes(characters: number): string {
   return `${(characters / 1024).toFixed(0)} KB`;
+}
+
+function formatSampleCount(samples: number): string {
+  return `${samples} ${samples === 1 ? "amostra" : "amostras"}`;
 }
 
 export default function LivePage() {
@@ -133,72 +145,78 @@ export default function LivePage() {
           </div>
         </header>
 
-        <div className="nb-grid nb-grid--2">
-          <Card
-            heading="Conexão WiFi"
-            action={
-              isWifiOnline || isWifiConnecting ? (
-                <Button variant="danger" onClick={disconnect}>
-                  Desconectar
-                </Button>
+        <div className="nb-grid">
+          <div className="nb-grid nb-grid--2">
+            <Card
+              heading="Conexão WiFi"
+              action={
+                isWifiOnline || isWifiConnecting ? (
+                  <Button variant="danger" onClick={disconnect}>
+                    Desconectar
+                  </Button>
+                ) : (
+                  <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
+                    Conectar
+                  </Button>
+                )
+              }
+            >
+              <div className="nt-connect">
+                <Field
+                  label="IP do ESP32"
+                  inputMode="decimal"
+                  placeholder="192.168.4.1"
+                  value={config.ip}
+                  invalid={config.ip.length > 0 && !ipValid}
+                  hint={
+                    config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
+                  }
+                  onChange={(event) => setConfig({ ip: event.target.value })}
+                />
+              </div>
+            </Card>
+
+            <Card
+              heading="Conexão serial"
+              action={
+                isSerialOnline || isSerialConnecting ? (
+                  <Button variant="danger" onClick={() => void disconnectSerial()}>
+                    Desconectar
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    onClick={handleSerialConnect}
+                    disabled={!isSerialSupported()}
+                  >
+                    Conectar
+                  </Button>
+                )
+              }
+            >
+              {isSerialSupported() ? (
+                <div className="nt-connect">
+                  <div className="nb-field">
+                    <span className="nb-field__label">Porta USB</span>
+                    <output className="nt-port-state">{SERIAL_PORT_STATE[serialStatus]}</output>
+                    <span className="nb-field__hint">Reconecta sozinho se o cabo cair</span>
+                  </div>
+                </div>
               ) : (
-                <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
-                  Conectar
-                </Button>
-              )
-            }
-          >
-            <div className="nt-connect">
-              <Field
-                label="IP do ESP32"
-                inputMode="decimal"
-                placeholder="192.168.4.1"
-                value={config.ip}
-                invalid={config.ip.length > 0 && !ipValid}
-                hint={
-                  config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
-                }
-                onChange={(event) => setConfig({ ip: event.target.value })}
-              />
-            </div>
-          </Card>
+                <Alert variant="warning">
+                  Este navegador não tem Web Serial. Use Chrome, Edge ou Chromium em localhost.
+                </Alert>
+              )}
+            </Card>
+          </div>
 
           <Card
-            heading="Conexão serial"
-            action={
-              isSerialOnline || isSerialConnecting ? (
-                <Button variant="danger" onClick={() => void disconnectSerial()}>
-                  Desconectar
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  onClick={handleSerialConnect}
-                  disabled={!isSerialSupported()}
-                >
-                  Conectar
-                </Button>
-              )
-            }
+            heading="Parâmetros do motor"
+            action={<span className="nb-section__subtitle">Usados na estimativa de RPM</span>}
           >
-            {isSerialSupported() ? (
-              <p className="nb-section__subtitle">
-                Ligue o ESP32 no USB e escolha a porta. Reconecta sozinho se o cabo cair.
-              </p>
-            ) : (
-              <Alert variant="warning">
-                Este navegador não tem Web Serial. Use Chrome, Edge ou Chromium em localhost.
-              </Alert>
-            )}
+            <MotorParams />
           </Card>
         </div>
-
-        <Card
-          heading="Parâmetros do motor"
-          action={<span className="nb-section__subtitle">Usados na estimativa de RPM</span>}
-        >
-          <MotorParams />
-        </Card>
 
         <Section title="Leituras" eyebrow="Agora">
           <MetricRow>
@@ -331,12 +349,16 @@ export default function LivePage() {
                 {isRecording ? (
                   <dl className="nt-record__targets">
                     <dt>WiFi</dt>
-                    <dd>{browserRecording.samples.wifi} amostras</dd>
+                    <dd>{formatSampleCount(browserRecording.samples.wifi)}</dd>
                     <dt>Serial</dt>
-                    <dd>{browserRecording.samples.serial} amostras</dd>
+                    <dd>{formatSampleCount(browserRecording.samples.serial)}</dd>
                     <dt>Cartão SD</dt>
-                    <dd className="nt-record__file">
-                      {isSdRecording ? recording?.file : "sem gravação"}
+                    <dd>
+                      {isSdRecording ? (
+                        <span className="nt-record__file">{recording?.file}</span>
+                      ) : (
+                        "sem gravação"
+                      )}
                     </dd>
                   </dl>
                 ) : null}
@@ -432,7 +454,7 @@ export default function LivePage() {
                       Baixar
                     </Button>
                     <Button
-                      variant="danger"
+                      variant="ghost"
                       aria-label={`Excluir ${log.fileName}`}
                       onClick={() => void deleteSavedLog(log.fileName)}
                     >

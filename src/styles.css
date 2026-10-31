@@ -321,13 +321,16 @@ button {
   display: none;
 }
 .nb-rail__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   border-top: 1px solid var(--color-border);
-  padding: 12px 16px;
+  padding: 14px 16px;
 }
 .nb-rail.is-collapsed .nb-rail__footer {
-  padding: 12px 8px;
-  display: grid;
-  place-items: center;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 8px;
 }
 
 /* ─── MOBILE TOP BAR + DRAWER ─── */
@@ -551,7 +554,9 @@ button {
   line-height: 1.55;
 }
 .nb-hero__aside {
-  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .nb-section {
@@ -862,10 +867,14 @@ button {
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  white-space: nowrap;
   color: var(--color-text-soft);
   transition:
     color var(--duration-normal) var(--ease-out),
     border-color var(--duration-normal) var(--ease-out);
+}
+.nt-status__link {
+  color: var(--color-text-soft);
 }
 .nt-status__dot {
   width: 8px;
@@ -894,10 +903,25 @@ button {
   color: var(--color-text-subtle);
 }
 .nt-status--sm {
+  width: 100%;
   height: auto;
   padding: 0;
   border: none;
   background: none;
+  font-family: var(--font-body);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.nt-status--sm .nt-status__value {
+  margin-left: auto;
+}
+.nb-rail.is-collapsed .nt-status--sm {
+  width: auto;
+}
+.nb-rail.is-collapsed .nt-status__link,
+.nb-rail.is-collapsed .nt-status__value {
+  display: none;
 }
 @keyframes nt-pulse {
   0% {
@@ -921,6 +945,13 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 360px);
   gap: 14px;
+}
+.nt-port-state {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  font-size: 14px;
+  color: var(--color-text-soft);
 }
 .nt-params {
   display: grid;
@@ -1139,8 +1170,7 @@ button {
 .nt-saved-logs {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 0;
+  margin: -8px 0;
   padding: 0;
   list-style: none;
 }
@@ -1148,7 +1178,19 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 12px;
+  gap: 8px 16px;
+  padding: 8px 0;
+}
+.nt-saved-logs__row + .nt-saved-logs__row {
+  border-top: 1px solid var(--color-border);
+}
+@media (max-width: 640px) {
+  .nt-saved-logs__row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .nt-saved-logs__row .nt-record__file {
+    grid-column: 1 / -1;
+  }
 }
 .nt-rec-dot {
   width: 9px;

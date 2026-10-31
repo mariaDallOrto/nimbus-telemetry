@@ -14,6 +14,11 @@ describe("ConnectionStatusBadge", () => {
     expect(badge).toHaveAttribute("data-state", "online");
   });
 
+  test("names the link when one is given", () => {
+    render(<ConnectionStatusBadge status="online" linkLabel="Serial" />);
+    expect(screen.getByRole("status")).toHaveAccessibleName("Conexão: Serial: Online");
+  });
+
   test("announces the connecting state", () => {
     render(<ConnectionStatusBadge status="connecting" />);
     expect(screen.getByText("Conectando")).toBeInTheDocument();

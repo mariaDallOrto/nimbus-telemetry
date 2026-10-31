@@ -27,9 +27,11 @@ export function ConnectionStatusBadge({
       data-state={status}
       role="status"
       aria-label={`Conexão: ${label}`}
+      title={label}
     >
       <span className="nt-status__dot" aria-hidden />
-      {label}
+      {linkLabel ? <span className="nt-status__link">{linkLabel}</span> : null}
+      <span className="nt-status__value">{STATUS_LABEL[status]}</span>
     </span>
   );
 }
