@@ -116,7 +116,7 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
     ],
   },
   {
-    title: "Hoje · 24/10/2026",
+    title: "24/10/2026",
     logs: [
       {
         id: "bateria-acabando",
@@ -131,6 +131,39 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
         name: "Bateria prime",
         description:
           "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
+      },
+    ],
+  },
+  {
+    title: "T-Motor · 31/10/2026",
+    logs: [
+      {
+        id: "t-motor-normal-serial",
+        file: "2026-10-31/normal-serial.csv",
+        name: "Normal · serial",
+        description:
+          "Log completo do teste normal, 1m40s sem perda de pacotes (média até 17 A).",
+      },
+      {
+        id: "t-motor-pico-luta-serial",
+        file: "2026-10-31/pico-luta-serial.csv",
+        name: "Pico de luta · serial",
+        description:
+          "Log completo do pico de luta, 1 min sem perda de pacotes (média até 32 A).",
+      },
+      {
+        id: "t-motor-normal-wifi",
+        file: "2026-10-31/normal-wifi.csv",
+        name: "Normal · WiFi",
+        description:
+          "Mesmo teste pelo WiFi. Só os primeiros 5 s, antes de acelerar.",
+      },
+      {
+        id: "t-motor-pico-luta-wifi",
+        file: "2026-10-31/pico-luta-wifi.csv",
+        name: "Pico de luta · WiFi",
+        description:
+          "Mesmo teste pelo WiFi. Só os primeiros 2 s, antes de acelerar.",
       },
     ],
   },
