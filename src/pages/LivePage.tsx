@@ -67,12 +67,14 @@ export default function LivePage() {
     downloadSavedLog,
     deleteSavedLog,
     logStoreFailed,
+    calibratedAt,
   } = useTelemetry();
 
   const [maStick, setMaStick] = useState(1);
   const [maCurrent, setMaCurrent] = useState(1);
   const [maRpm, setMaRpm] = useState(1);
   const [visibleWindow, setVisibleWindow] = useState(80);
+  const [isConfirmingCalibration, setIsConfirmingCalibration] = useState(false);
 
   const currentBoundsRef = useRef<AxisBounds | null>(null);
   const rpmBoundsRef = useRef<AxisBounds | null>(null);
@@ -120,6 +122,13 @@ export default function LivePage() {
     connect();
   };
 
+  const canCalibrate = isOnline && !isRecording && (lastSample?.stickPct ?? 0) === 0;
+
+  const handleCalibrate = () => {
+    sendCommand("CALIBRATE_ZERO");
+    setIsConfirmingCalibration(false);
+  };
+
   const handleSerialConnect = () => {
     connectSerial().catch((cause: unknown) => console.warn("Serial port not selected", cause));
   };
@@ -135,8 +144,8 @@ export default function LivePage() {
             </div>
             <h1 className="nb-hero__title">Telemetria ao Vivo</h1>
             <p className="nb-hero__lede">
-              Acompanhe stick, corrente e RPM estimado em tempo real, grave logs pelo WiFi, pela
-              serial e no cartão SD ao mesmo tempo e ajuste o receptor.
+              Acompanhe stick, corrente e RPM estimado em tempo real, grave logs pela serial e no
+              cartão SD ao mesmo tempo e ajuste o receptor.
             </p>
           </div>
           <div className="nb-hero__aside">
@@ -331,7 +340,7 @@ export default function LivePage() {
               </Alert>
             </div>
           ) : null}
-          <div className="nb-grid nb-grid--2">
+          <div className="nb-grid nt-controls">
             <Card heading="Gravação">
               <div className="nt-record">
                 <div className="nt-record__status">
@@ -348,10 +357,8 @@ export default function LivePage() {
                 </div>
                 {isRecording ? (
                   <dl className="nt-record__targets">
-                    <dt>WiFi</dt>
-                    <dd>{formatSampleCount(browserRecording.samples.wifi)}</dd>
                     <dt>Serial</dt>
-                    <dd>{formatSampleCount(browserRecording.samples.serial)}</dd>
+                    <dd>{formatSampleCount(browserRecording.samples)}</dd>
                     <dt>Cartão SD</dt>
                     <dd>
                       {isSdRecording ? (
@@ -362,9 +369,14 @@ export default function LivePage() {
                     </dd>
                   </dl>
                 ) : null}
+                {isRecording && !isSerialOnline ? (
+                  <Alert variant="warning">
+                    Sem serial conectada: nada está sendo salvo no navegador.
+                  </Alert>
+                ) : null}
                 {sdFailed ? (
                   <Alert variant="warning">
-                    Cartão SD falhou. WiFi e serial seguem salvando no navegador.
+                    Cartão SD falhou. A serial segue salvando no navegador.
                   </Alert>
                 ) : null}
                 {logStoreFailed ? (
@@ -434,15 +446,52 @@ export default function LivePage() {
                 </div>
               </div>
             </Card>
+            <Card heading="Sensor de corrente">
+              <div className="nt-record">
+                <div className="nt-record__status">
+                  <span>
+                    Zero atual: <strong>{fixedOrDash(recording?.currentZeroA ?? null, 3)} A</strong>
+                    {calibratedAt
+                      ? ` · calibrado às ${calibratedAt.toLocaleTimeString("pt-BR")}`
+                      : null}
+                  </span>
+                </div>
+                {isConfirmingCalibration ? (
+                  <>
+                    <Alert variant="warning">
+                      Motor parado e sem corrente circulando? Com corrente, o zero salvo na placa
+                      fica errado.
+                    </Alert>
+                    <div className="nt-record__buttons">
+                      <Button variant="secondary" onClick={() => setIsConfirmingCalibration(false)}>
+                        Cancelar
+                      </Button>
+                      <Button variant="primary" disabled={!canCalibrate} onClick={handleCalibrate}>
+                        Calibrar agora
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    block
+                    disabled={!canCalibrate}
+                    onClick={() => setIsConfirmingCalibration(true)}
+                  >
+                    Calibrar zero
+                  </Button>
+                )}
+              </div>
+            </Card>
           </div>
         </Section>
 
-        <Section title="Logs salvos" eyebrow="WiFi · Serial">
+        <Section title="Logs salvos" eyebrow="Serial">
           <Card>
             {savedLogs.length === 0 ? (
               <p className="nb-section__subtitle">
-                Nenhum log salvo. O botão Iniciar grava um CSV do WiFi e um da serial, que ficam
-                aqui até você excluir.
+                Nenhum log salvo. O botão Iniciar grava um CSV da serial, que fica aqui até você
+                excluir.
               </p>
             ) : (
               <ul className="nt-saved-logs">

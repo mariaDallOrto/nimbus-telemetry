@@ -41,11 +41,14 @@ export type RecordingStatus = {
   phase: RecordingPhase;
   file: string;
   rxMode: string | null;
+  /** Zero offset stored on the board, in amps; null on older firmware. */
+  currentZeroA: number | null;
 };
 
 export type TelemetryMessage =
   | { kind: "sample"; sample: TelemetrySample }
-  | { kind: "status"; status: RecordingStatus };
+  | { kind: "status"; status: RecordingStatus }
+  | { kind: "calibrated" };
 
 /** Connection lifecycle surfaced to the UI for system-status visibility. */
 export type ConnectionStatus = "offline" | "connecting" | "online" | "reconnecting";

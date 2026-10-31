@@ -4,6 +4,7 @@ import { parseTelemetryMessage } from "../src/telemetry/parseMessage";
 import { createSessionRecorder } from "../src/telemetry/sessionRecorder";
 
 const START = new Date(2026, 9, 24, 14, 0, 0);
+const FILE_NAME = "2026-10-24T14_00_00_0-serial.csv";
 
 function secondsAfterStart(seconds: number) {
   return new Date(START.getTime() + seconds * 1000);
@@ -31,58 +32,45 @@ function dataRows(text: string) {
 }
 
 describe("sessionRecorder", () => {
-  test("writes one file per link", async () => {
+  test("writes the session to one serial file", async () => {
     const { files, store } = memoryStore();
     const recorder = createSessionRecorder(store, () => {});
     recorder.start(START);
-    recorder.record("wifi", sample(), START);
-    recorder.record("serial", sample(), START);
-    recorder.record("serial", sample(), START);
+    recorder.record(sample(), START);
+    recorder.record(sample(), START);
     const recorded = await recorder.stop();
 
-    expect(recorded.map((file) => file.fileName).sort()).toEqual([
-      "2026-10-24T14_00_00_0-serial.csv",
-      "2026-10-24T14_00_00_0-wifi.csv",
-    ]);
-    expect(dataRows(files.get("2026-10-24T14_00_00_0-serial.csv") ?? "")).toBe(2);
-    expect(dataRows(files.get("2026-10-24T14_00_00_0-wifi.csv") ?? "")).toBe(1);
+    expect(recorded?.fileName).toBe(FILE_NAME);
+    expect(dataRows(files.get(FILE_NAME) ?? "")).toBe(2);
   });
 
-  test("keeps a quick restart in its own files", async () => {
+  test("keeps a quick restart in its own file", async () => {
     const recorder = createSessionRecorder(memoryStore().store, () => {});
     recorder.start(START);
-    recorder.record("wifi", sample(), START);
-    const [first] = await recorder.stop();
+    recorder.record(sample(), START);
+    const first = await recorder.stop();
     recorder.start(new Date(START.getTime() + 300));
-    recorder.record("wifi", sample(), START);
-    const [second] = await recorder.stop();
+    recorder.record(sample(), START);
+    const second = await recorder.stop();
     expect(first?.fileName).not.toBe(second?.fileName);
   });
 
-  test("stores nothing for a link that drops before its first sample", async () => {
+  test("produces no file when no sample arrived", async () => {
     const { files, store } = memoryStore();
     const recorder = createSessionRecorder(store, () => {});
     recorder.start(START);
-    recorder.flushLink("wifi");
-    await recorder.stop();
+    recorder.flush();
+    expect(await recorder.stop()).toBeNull();
     expect(files.size).toBe(0);
-  });
-
-  test("skips the file of a link that delivered nothing", async () => {
-    const recorder = createSessionRecorder(memoryStore().store, () => {});
-    recorder.start(START);
-    recorder.record("serial", sample(), START);
-    const recorded = await recorder.stop();
-    expect(recorded.map((file) => file.fileName)).toEqual(["2026-10-24T14_00_00_0-serial.csv"]);
   });
 
   test("stores samples during the session, before stop", async () => {
     const { files, store } = memoryStore();
     const recorder = createSessionRecorder(store, () => {});
     recorder.start(START);
-    recorder.record("wifi", sample(), secondsAfterStart(2));
+    recorder.record(sample(), secondsAfterStart(2));
     await Bun.sleep(0);
-    expect(dataRows(files.get("2026-10-24T14_00_00_0-wifi.csv") ?? "")).toBe(1);
+    expect(dataRows(files.get(FILE_NAME) ?? "")).toBe(1);
   });
 
   test("retries rows a failed write left behind, without duplicates", async () => {
@@ -101,13 +89,13 @@ describe("sessionRecorder", () => {
     };
     const recorder = createSessionRecorder(flakyStore, (cause) => failures.push(cause));
     recorder.start(START);
-    recorder.record("wifi", sample(), secondsAfterStart(2));
+    recorder.record(sample(), secondsAfterStart(2));
     await Bun.sleep(0);
-    recorder.record("wifi", sample(), secondsAfterStart(4));
+    recorder.record(sample(), secondsAfterStart(4));
     await recorder.stop();
 
     expect(failures).toHaveLength(1);
-    expect(dataRows(files.get("2026-10-24T14_00_00_0-wifi.csv") ?? "")).toBe(2);
+    expect(dataRows(files.get(FILE_NAME) ?? "")).toBe(2);
   });
 
   test("hands back the full file even when the store stays down", async () => {
@@ -120,8 +108,8 @@ describe("sessionRecorder", () => {
     };
     const recorder = createSessionRecorder(brokenStore, () => {});
     recorder.start(START);
-    recorder.record("wifi", sample(), START);
-    const [file] = await recorder.stop();
+    recorder.record(sample(), START);
+    const file = await recorder.stop();
     expect(dataRows(file?.text ?? "")).toBe(1);
   });
 });

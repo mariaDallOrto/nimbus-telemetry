@@ -29,6 +29,8 @@ export function parseTelemetryMessage(raw: string): TelemetryMessage | null {
   const frame = asRecord(parsed);
   if (!frame) return null;
 
+  if (frame["type"] === "CALIBRATION") return { kind: "calibrated" };
+
   if (frame["type"] === "STATUS") {
     const recState = frame["recState"];
     const phase = recState === "STARTED" ? "started" : recState === "STOPPED" ? "stopped" : null;
@@ -40,6 +42,7 @@ export function parseTelemetryMessage(raw: string): TelemetryMessage | null {
         phase,
         file: typeof frame["file"] === "string" ? frame["file"] : "",
         rxMode: typeof rxMode === "string" ? rxMode : null,
+        currentZeroA: asNumber(frame["currentZeroA"]),
       },
     };
   }

@@ -47,6 +47,18 @@ describe("parseTelemetryMessage", () => {
     expect(message.status.rxMode).toBe("BI");
   });
 
+  test("reads the zero offset stored on the board", () => {
+    const message = parseTelemetryMessage(
+      JSON.stringify({ type: "STATUS", recState: "STOPPED", currentZeroA: -0.123 }),
+    );
+    if (message?.kind !== "status") throw new Error("expected status");
+    expect(message.status.currentZeroA).toBe(-0.123);
+  });
+
+  test("parses a calibration confirmation", () => {
+    expect(parseTelemetryMessage('{"type":"CALIBRATION"}')).toEqual({ kind: "calibrated" });
+  });
+
   test("returns null for malformed json", () => {
     expect(parseTelemetryMessage("{not json")).toBeNull();
   });

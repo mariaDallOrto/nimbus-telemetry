@@ -1192,6 +1192,14 @@ button {
     grid-column: 1 / -1;
   }
 }
+.nt-controls {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .nt-controls {
+    grid-template-columns: 1fr;
+  }
+}
 .nt-rec-dot {
   width: 9px;
   height: 9px;

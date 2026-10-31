@@ -43,7 +43,7 @@ export type LiveBuffers = {
 
 export type BrowserRecording = {
   isActive: boolean;
-  samples: Record<TelemetryLink, number>;
+  samples: number;
 };
 
 type TelemetryContextValue = {
@@ -68,6 +68,8 @@ type TelemetryContextValue = {
   downloadSavedLog: (fileName: string) => Promise<void>;
   deleteSavedLog: (fileName: string) => Promise<void>;
   logStoreFailed: boolean;
+  /** Moment the board last confirmed a zero calibration in this session. */
+  calibratedAt: Date | null;
 };
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -119,6 +121,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const [savedLogs, setSavedLogs] = useState<SavedLog[]>([]);
   const [isBrowserRecording, setIsBrowserRecording] = useState(false);
   const [logStoreFailed, setLogStoreFailed] = useState(false);
+  const [calibratedAt, setCalibratedAt] = useState<Date | null>(null);
 
   const buffersRef = useRef<LiveBuffers>(emptyBuffers());
   const socketRef = useRef<WebSocket | null>(null);
@@ -171,9 +174,15 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
         setRecording(message.status);
         return;
       }
+      if (message.kind === "calibrated") {
+        setCalibratedAt(new Date());
+        return;
+      }
       const receivedAt = new Date();
-      recorder.record(link, message.sample, receivedAt);
-      if (link === "serial") lastSerialSampleAtRef.current = receivedAt.getTime();
+      if (link === "serial") {
+        recorder.record(message.sample, receivedAt);
+        lastSerialSampleAtRef.current = receivedAt.getTime();
+      }
       const serialIsLive =
         receivedAt.getTime() - lastSerialSampleAtRef.current < SERIAL_LIVE_WINDOW_MS;
       if (link === "serial" || !serialIsLive) showSample(message.sample);
@@ -183,7 +192,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const serial = useSerialConnection(
     (line) => handleFrame("serial", line),
-    () => recorder.flushLink("serial"),
+    () => recorder.flush(),
   );
   const sendSerialCommand = serial.send;
 
@@ -215,7 +224,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     socket.onclose = () => {
       if (socketRef.current !== socket) return;
       socketRef.current = null;
-      recorder.flushLink("wifi");
       if (intentionalCloseRef.current) {
         setStatus("offline");
         return;
@@ -223,7 +231,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       setStatus("reconnecting");
       reconnectRef.current = setTimeout(() => connect(), RECONNECT_DELAY_MS);
     };
-  }, [handleFrame, recorder]);
+  }, [handleFrame]);
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true;
@@ -251,9 +259,9 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const stopRecording = useCallback(async () => {
     sendCommand("STOP_RECORD");
-    const files = await recorder.stop();
+    const file = await recorder.stop();
     setIsBrowserRecording(false);
-    for (const file of files) downloadTextFile(file.fileName, file.text);
+    if (file) downloadTextFile(file.fileName, file.text);
     await refreshSavedLogs();
   }, [recorder, refreshSavedLogs, sendCommand]);
 
@@ -305,7 +313,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       sendCommand,
       browserRecording: {
         isActive: isBrowserRecording,
-        samples: { wifi: recorder.sampleCount("wifi"), serial: recorder.sampleCount("serial") },
+        samples: recorder.sampleCount(),
       },
       startRecording,
       stopRecording,
@@ -313,6 +321,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       downloadSavedLog,
       deleteSavedLog,
       logStoreFailed,
+      calibratedAt,
     }),
     [
       status,
@@ -335,6 +344,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       downloadSavedLog,
       deleteSavedLog,
       logStoreFailed,
+      calibratedAt,
     ],
   );
 
