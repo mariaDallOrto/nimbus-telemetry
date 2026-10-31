@@ -140,30 +140,16 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
       {
         id: "t-motor-normal-serial",
         file: "2026-10-31/normal-serial.csv",
-        name: "Normal · serial",
+        name: "Normal",
         description:
           "Log completo do teste normal, 1m40s sem perda de pacotes (média até 17 A).",
       },
       {
         id: "t-motor-pico-luta-serial",
         file: "2026-10-31/pico-luta-serial.csv",
-        name: "Pico de luta · serial",
+        name: "Pico de luta",
         description:
           "Log completo do pico de luta, 1 min sem perda de pacotes (média até 32 A).",
-      },
-      {
-        id: "t-motor-normal-wifi",
-        file: "2026-10-31/normal-wifi.csv",
-        name: "Normal · WiFi",
-        description:
-          "Mesmo teste pelo WiFi. Só os primeiros 5 s, antes de acelerar.",
-      },
-      {
-        id: "t-motor-pico-luta-wifi",
-        file: "2026-10-31/pico-luta-wifi.csv",
-        name: "Pico de luta · WiFi",
-        description:
-          "Mesmo teste pelo WiFi. Só os primeiros 2 s, antes de acelerar.",
       },
     ],
   },
