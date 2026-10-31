@@ -15,6 +15,8 @@
  *   - Comandos seriais durante operacao: digite '?' no monitor serial
  *   - WebSocket: envie "DIAG" para receber JSON com saude completa
  *   - HTTP: GET /health retorna JSON resumido (debug pelo celular)
+ *   - Serial: mesmo JSON do WebSocket, uma linha por pacote (dashboard conecta pelo cabo)
+ *     -> 't' no monitor serial silencia o stream para ler os logs
  *
  * Como diagnosticar problemas comuns (na ordem em que aparecem no Serial @ 115200):
  *   - "I2C scan: nenhum dispositivo" -> SDA/SCL invertidos ou modulo ADS sem alimentacao
@@ -98,6 +100,10 @@ const uint32_t TX_INTERVAL_MS     = 50;     // 20 Hz
 const uint32_t FLUSH_INTERVAL_MS  = 5000;
 const uint32_t HEALTH_INTERVAL_MS = 5000;
 const uint16_t CURRENT_SAMPLES    = 100;    // janela do sensor de corrente
+const uint32_t SERIAL_BAUD        = 115200;
+const size_t   SERIAL_TX_BUFFER_BYTES = 2048;  // sem buffer, cada JSON trava o loop por ~25ms
+const size_t   SERIAL_COMMAND_MAX_CHARS = 32;
+const size_t   WS_COMMAND_QUEUE_LENGTH  = 8;
 const uint32_t PWM_TIMEOUT_MS     = 50;     // sem edge => sinal perdido
 
 // SD: clock SPI conservador (jumper/protoboard nao aguenta os 40MHz padrao)
@@ -138,6 +144,12 @@ uint32_t   lastTxMs       = 0;
 uint32_t   lastFlushMs    = 0;
 uint32_t   lastHealthMs   = 0;
 uint32_t   lastSdRetryMs  = 0;
+bool       serialStreamOn = true;
+
+// WebSocket roda na task async_tcp: comandos entram nesta fila e executam no loop(),
+// a unica task que toca no SD e na Serial.
+struct WsCommand { char text[SERIAL_COMMAND_MAX_CHARS + 1]; uint32_t clientId; };
+QueueHandle_t wsCommands = nullptr;
 float      currentZeroOffsetA = 0;   // calibrado via comando 'c', persistido em NVS
 Preferences calibrationStore;
 
@@ -197,10 +209,24 @@ WarnState warnCell={0}, warnCurr={0}, warnPwm={0}, warnHeap={0}, warnLoop={0};
 
 String getTimestamp() {
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) return String(millis());
+  if (!getLocalTime(&timeinfo, 0)) return String(millis());  // sem NTP nao pode esperar: roda por linha
   char buf[25];
   strftime(buf, sizeof(buf), "%Y-%m-%dT%H_%M_%S", &timeinfo);
   return String(buf);
+}
+
+// =========================================================
+// ENVIO POR TODOS OS CANAIS (WebSocket + Serial)
+// =========================================================
+void broadcast(const String& message) {
+  ws.textAll(message);
+  Serial.println(message);
+}
+
+String statusJson(const String& file) {
+  return "{\"type\":\"STATUS\", \"recState\":\"" + String(isRecording ? "STARTED" : "STOPPED") + "\""
+       + ", \"file\":\"" + file + "\""
+       + ", \"rxMode\":\"" + String(tipoSinal == UNIDIRECIONAL ? "UNIDIRECIONAL" : "BIDIRECIONAL") + "\"}";
 }
 
 // =========================================================
@@ -243,7 +269,7 @@ bool sdRemount() {
           saude.sdErr++;
           LOG_ERR(F("SD remontado mas reabrir arquivo falhou -- gravacao parada"));
           isRecording = false;
-          ws.textAll("{\"type\":\"STATUS\", \"recState\":\"STOPPED\", \"file\":\"ERRO_SD\"}");
+          broadcast(statusJson("ERRO_SD"));
         }
       }
       return true;
@@ -349,6 +375,7 @@ void printHelp() {
   Serial.println(F("  i  scan I2C"));
   Serial.println(F("  z  zera contadores (i2cErr, loopMaxMs, packetCounter)"));
   Serial.println(F("  c  calibra offset do sensor de corrente (SEM corrente circulando)"));
+  Serial.println(F("  t  liga/desliga o stream de telemetria na serial"));
   Serial.println(F("--------------------------"));
 }
 
@@ -427,9 +454,7 @@ void calibrateCurrentZero() {
   Serial.printf("[CAL] Offset = %.3fA (salvo em NVS, sera subtraido de todas as leituras)\n", currentZeroOffsetA);
 }
 
-void handleSerialCmd() {
-  if (!Serial.available()) return;
-  char c = Serial.read();
+void handleSerialKey(char c) {
   switch (c) {
     case '?': case 'h': printHelp();             break;
     case 'd':           printDiag();             break;
@@ -437,6 +462,10 @@ void handleSerialCmd() {
     case 's':           selfTest();              break;
     case 'i':           scanI2C();               break;
     case 'c':           calibrateCurrentZero();  break;
+    case 't':
+      serialStreamOn = !serialStreamOn;
+      LOG_INFO(serialStreamOn ? F("Stream serial ligado") : F("Stream serial desligado"));
+      break;
     case 'z':
       saude.i2cErr = 0; saude.loopMaxMs = 0; packetCounter = 0;
       LOG_INFO(F("Contadores zerados"));
@@ -445,6 +474,23 @@ void handleSerialCmd() {
     default:
       Serial.print(F("Comando desconhecido: '")); Serial.print(c);
       Serial.println(F("'. Digite '?' para ajuda."));
+  }
+}
+
+// Letra minuscula = atalho humano. Maiuscula abre comando do dashboard, ate o fim da linha.
+void handleSerialCmd() {
+  static String commandLine;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (commandLine.isEmpty() && !isUpperCase(c)) {
+      handleSerialKey(c);
+    } else if (c == '\r' || c == '\n') {
+      serialStreamOn = true;   // dashboard falando = quer telemetria, mesmo apos 't'
+      handleCommand(commandLine, 0);
+      commandLine = "";
+    } else if (commandLine.length() < SERIAL_COMMAND_MAX_CHARS) {
+      commandLine += c;
+    }
   }
 }
 
@@ -601,7 +647,7 @@ void doTx() {
     "{\"id\":%u,\"rssi\":%ld,"
     "\"current\":%.2f,\"currentPeak\":%.2f,\"currentMin\":%.2f,"
     "\"pwmVal\":%d,\"vTotal\":%.2f,\"nCells\":%d,"
-    "\"c1\":%.2f,\"c2\":%.2f,\"c3\":%.2f,\"c4\":%.2f,\"c5\":%.2f,\"c6\":%.2f,"
+    "\"c1\":%.3f,\"c2\":%.3f,\"c3\":%.3f,\"c4\":%.3f,\"c5\":%.3f,\"c6\":%.3f,"
     "\"loopMs\":%u,\"samples\":%u,\"pwmAgeMs\":%u,\"heapKB\":%u,\"i2cErr\":%u}",
     packetCounter, WiFi.RSSI(),
     ult.currentMean, ult.currentPeak, ult.currentMin,
@@ -610,7 +656,10 @@ void doTx() {
     ult.cells[3], ult.cells[4], ult.cells[5],
     ult.loopMs, ult.samples, ult.pwmAgeMs,
     ESP.getFreeHeap() / 1024, saude.i2cErr);
-  if (n > 0 && n < (int)sizeof(json)) ws.textAll(json);
+  if (n > 0 && n < (int)sizeof(json)) {
+    ws.textAll(json);
+    if (serialStreamOn) Serial.println(json);
+  }
 
   // CSV (colunas originais preservadas; extras no fim)
   if (isRecording && !dataFile) {
@@ -649,7 +698,7 @@ void doTx() {
 // =========================================================
 // WEBSOCKET
 // =========================================================
-void sendDiagWs(AsyncWebSocketClient* cl) {
+void sendDiag(uint32_t clientId) {
   static char buf[768];
   snprintf(buf, sizeof(buf),
     "{\"type\":\"DIAG\","
@@ -669,30 +718,17 @@ void sendDiagWs(AsyncWebSocketClient* cl) {
     currentZeroOffsetA,
     isRecording ? 1 : 0,
     currentLogFile.c_str());
-  if (cl) cl->text(buf); else ws.textAll(buf);
+  if (clientId != 0) ws.text(clientId, buf); else broadcast(buf);
 }
 
-void onWsEvent(AsyncWebSocket* /*srv*/, AsyncWebSocketClient* client,
-               AwsEventType type, void* arg, uint8_t* data, size_t len) {
-  if (type == WS_EVT_CONNECT) {
-    String stateJson = "{\"type\":\"STATUS\", \"recState\":\"";
-    stateJson += isRecording ? "STARTED" : "STOPPED";
-    stateJson += "\", \"file\":\"" + currentLogFile + "\"";
-    stateJson += ", \"rxMode\":\"" + String(tipoSinal == UNIDIRECIONAL ? "UNIDIRECIONAL" : "BIDIRECIONAL") + "\"}";
-    client->text(stateJson);
-    LOG_INFO(F("WebSocket: cliente conectado"));
-    return;
-  }
-  if (type != WS_EVT_DATA) return;
-
-  AwsFrameInfo* info = (AwsFrameInfo*)arg;
-  if (!(info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)) return;
-
-  String msg;
-  msg.reserve(len);
-  for (size_t i = 0; i < len; i++) msg += (char)data[i];
-
+// Comandos do dashboard: mesmos pelo WebSocket e pela Serial (clientId == 0).
+// O dashboard envia pelos dois canais, entao repetir um comando nao pode ter efeito.
+void handleCommand(const String& msg, uint32_t clientId) {
   if (msg == "START_RECORD") {
+    if (isRecording) {
+      broadcast(statusJson(currentLogFile));
+      return;
+    }
     currentLogFile = "/log_" + getTimestamp() + ".csv";
     Serial.print(F("[INFO] Criando arquivo: ")); Serial.println(currentLogFile);
     dataFile = SD.open(currentLogFile, FILE_WRITE);
@@ -704,39 +740,66 @@ void onWsEvent(AsyncWebSocket* /*srv*/, AsyncWebSocketClient* client,
       dataFile.println(F("Timestamp,PacketID,RSSI_dBm,Corrente_A,Comando_Pct,TensaoTotal_V,Celulas_N,C1,C2,C3,C4,C5,C6,Corrente_Med_A,Corrente_Min_A,LoopMs,PwmIdleMs"));
       isRecording = true;
       lastFlushMs = millis();
-      ws.textAll("{\"type\":\"STATUS\", \"recState\":\"STARTED\", \"file\":\"" + currentLogFile + "\"}");
+      broadcast(statusJson(currentLogFile));
     } else {
       LOG_ERR(F("Falha ao abrir arquivo no SD"));
-      ws.textAll("{\"type\":\"STATUS\", \"recState\":\"STOPPED\", \"file\":\"ERRO_SD\"}");
+      currentLogFile = "ERRO_SD";
+      broadcast(statusJson(currentLogFile));
     }
   }
   else if (msg == "STOP_RECORD") {
-    if (dataFile) { dataFile.flush(); dataFile.close(); }
     isRecording = false;
+    if (dataFile) { dataFile.flush(); dataFile.close(); }
     LOG_INFO(F("Gravacao parada"));
-    ws.textAll("{\"type\":\"STATUS\", \"recState\":\"STOPPED\", \"file\":\"" + currentLogFile + "\"}");
+    broadcast(statusJson(currentLogFile));
   }
   else if (msg == "SET_RX_UNI") {
     tipoSinal = UNIDIRECIONAL;
-    ws.textAll("{\"type\":\"STATUS\", \"recState\":\"" + String(isRecording?"STARTED":"STOPPED") + "\", \"rxMode\":\"UNIDIRECIONAL\"}");
+    broadcast(statusJson(currentLogFile));
   }
   else if (msg == "SET_RX_BI") {
     tipoSinal = BIDIRECIONAL;
-    ws.textAll("{\"type\":\"STATUS\", \"recState\":\"" + String(isRecording?"STARTED":"STOPPED") + "\", \"rxMode\":\"BIDIRECIONAL\"}");
+    broadcast(statusJson(currentLogFile));
+  }
+  else if (msg == "GET_STATUS") {
+    broadcast(statusJson(currentLogFile));
   }
   else if (msg == "DIAG") {
-    sendDiagWs(client);
+    sendDiag(clientId);
   }
   else {
-    Serial.print(F("[WARN] WS msg desconhecida: ")); Serial.println(msg);
+    Serial.print(F("[WARN] Comando desconhecido: ")); Serial.println(msg);
   }
+}
+
+void queueWsCommand(const char* text, size_t len, uint32_t clientId) {
+  WsCommand command = {};
+  if (len >= sizeof(command.text)) return;
+  memcpy(command.text, text, len);
+  command.clientId = clientId;
+  xQueueSend(wsCommands, &command, 0);
+}
+
+void onWsEvent(AsyncWebSocket* /*srv*/, AsyncWebSocketClient* client,
+               AwsEventType type, void* arg, uint8_t* data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    queueWsCommand("GET_STATUS", strlen("GET_STATUS"), client->id());
+    return;
+  }
+  if (type != WS_EVT_DATA) return;
+
+  AwsFrameInfo* info = (AwsFrameInfo*)arg;
+  if (!(info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)) return;
+
+  queueWsCommand((const char*)data, len, client->id());
 }
 
 // =========================================================
 // SETUP / LOOP
 // =========================================================
 void setup() {
-  Serial.begin(115200);
+  Serial.setTxBufferSize(SERIAL_TX_BUFFER_BYTES);
+  Serial.begin(SERIAL_BAUD);
   delay(200);
   saude.bootMs = millis();
 
@@ -815,6 +878,7 @@ void setup() {
     req->send(200, "application/json", b);
   });
 
+  wsCommands = xQueueCreate(WS_COMMAND_QUEUE_LENGTH, sizeof(WsCommand));
   ws.onEvent(onWsEvent);
   server.addHandler(&ws);
   server.begin();
@@ -828,6 +892,10 @@ void loop() {
   uint32_t now = millis();
 
   handleSerialCmd();
+  WsCommand wsCommand;
+  while (xQueueReceive(wsCommands, &wsCommand, 0) == pdTRUE) {
+    handleCommand(wsCommand.text, wsCommand.clientId);
+  }
   updateLed();
 
   if (now - lastTxMs >= TX_INTERVAL_MS) {
