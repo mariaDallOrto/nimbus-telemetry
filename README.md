@@ -14,6 +14,14 @@ Este projeto consiste em um sistema não invasivo de telemetria para robôs de c
 - Download de arquivos de log via WiFi.
 - Análise de pós-voo (Upload e renderização de gráficos do CSV).
 
+### Testar sem hardware
+
+```bash
+bun run mock
+```
+
+Abre a Análise com um log simulado: rampa de stick, socos, queda de bateria, RSSI ruim, perda de pacotes e leituras de alicate. O log é sempre igual e só existe no modo dev. Com `bun run dev`, ele fica em **Análise de CSV → Log simulado**.
+
 ---
 
 ## 🛠️ Hardware Necessário

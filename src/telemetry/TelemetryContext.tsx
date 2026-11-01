@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import { createLogStore, type SavedLog } from "./logStore";
-import { estimateRpm } from "./rpm";
 import { parseTelemetryMessage } from "./parseMessage";
 import { createSessionRecorder } from "./sessionRecorder";
 import { useSerialConnection } from "./useSerialConnection";
@@ -29,16 +28,20 @@ const STORAGE_KEYS = {
 } as const;
 const RECONNECT_DELAY_MS = 2000;
 const MAX_SAMPLES = 2000;
+const MIN_SAMPLE_GAP_SECONDS = 0.001;
 /** WiFi feeds the live view only after Serial stays silent this long. */
 const SERIAL_LIVE_WINDOW_MS = 500;
 
 /** Rolling, fixed-capacity buffers feeding the live chart. */
 export type LiveBuffers = {
-  labels: string[];
+  /** Arrival time, epoch seconds. Strictly ascending, as uPlot requires. */
+  times: number[];
   stick: number[];
   current: number[];
   currentPeak: number[];
-  rpm: number[];
+  currentMin: number[];
+  voltage: number[];
+  rssi: (number | null)[];
 };
 
 export type BrowserRecording = {
@@ -93,10 +96,18 @@ function readInitialConfig(): MotorConfig {
 }
 
 function emptyBuffers(): LiveBuffers {
-  return { labels: [], stick: [], current: [], currentPeak: [], rpm: [] };
+  return {
+    times: [],
+    stick: [],
+    current: [],
+    currentPeak: [],
+    currentMin: [],
+    voltage: [],
+    rssi: [],
+  };
 }
 
-function pushCapped(buffer: number[], value: number): void {
+function pushCapped<T>(buffer: T[], value: T): void {
   buffer.push(value);
   if (buffer.length > MAX_SAMPLES) buffer.shift();
 }
@@ -155,13 +166,14 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const showSample = useCallback((sample: TelemetrySample) => {
     const buffers = buffersRef.current;
-    const rpm = estimateRpm(sample, configRef.current);
+    const lastTime = buffers.times[buffers.times.length - 1] ?? 0;
+    pushCapped(buffers.times, Math.max(Date.now() / 1000, lastTime + MIN_SAMPLE_GAP_SECONDS));
     pushCapped(buffers.stick, sample.stickPct);
     pushCapped(buffers.current, sample.current);
     pushCapped(buffers.currentPeak, sample.currentPeak ?? sample.current);
-    pushCapped(buffers.rpm, rpm);
-    buffers.labels.push(new Date().toLocaleTimeString("pt-BR"));
-    if (buffers.labels.length > MAX_SAMPLES) buffers.labels.shift();
+    pushCapped(buffers.currentMin, sample.currentMin ?? sample.current);
+    pushCapped(buffers.voltage, sample.voltage);
+    pushCapped(buffers.rssi, sample.rssi);
     setLastSample(sample);
     setSampleVersion((version) => version + 1);
   }, []);

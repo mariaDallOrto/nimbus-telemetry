@@ -4,7 +4,8 @@ import { Card } from "../components/Card";
 import { MetricRow, MetricTile } from "../components/MetricTile";
 import { NumberField } from "../components/NumberField";
 import { Section } from "../components/Section";
-import { SeriesChart, type ChartSeries } from "../charts/SeriesChart";
+import { SeriesChart } from "../charts/SeriesChart";
+import { ELAPSED_TICK_STEPS, formatElapsed, type ChartSeries } from "../charts/plotOptions";
 import {
   CHART_COLOR_CLAMP,
   CHART_COLOR_CURRENT,
@@ -16,7 +17,7 @@ import {
   CHART_SERIES_PALETTE,
 } from "../charts/chartColors";
 import { BudgetMath, PointMath, fmt } from "./EnergyMath";
-import { numericColumn, parseCsv, temporalLabels, type ParsedCsv } from "../telemetry/csv";
+import { elapsedSeconds, numericColumn, parseCsv, type ParsedCsv } from "../telemetry/csv";
 import {
   HAI_WEAPON,
   consumedMah,
@@ -228,18 +229,6 @@ function timeSeries(
   };
 }
 
-function elapsedLabels(rows: ParsedCsv["rows"]): string[] {
-  const seconds = temporalLabels(rows).map((label) => {
-    const [h = 0, m = 0, s = 0] = label.split(":").map(Number);
-    return h * 3600 + m * 60 + s;
-  });
-  const start = seconds[0] ?? 0;
-  return seconds.map((t) => {
-    const elapsed = Math.max(0, Math.round(t - start));
-    return `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
-  });
-}
-
 function PointsTable({ points }: { points: readonly StickPoint[] }) {
   const top = points.reduce<StickPoint | null>(
     (best, p) => (best === null || p.stickHeld > best.stickHeld ? p : best),
@@ -311,7 +300,7 @@ function TestExplorer({
   );
   const presetSelectId = useId();
   const test = tests.find((t) => t.id === testId) ?? tests[0];
-  const labels = useMemo(() => (test ? elapsedLabels(test.parsed.rows) : []), [test]);
+  const elapsed = useMemo(() => (test ? elapsedSeconds(test.parsed.rows) : []), [test]);
   const series = useMemo(
     () => (test ? timeSeries(test.parsed, params, limitAmps) : null),
     [test, params, limitAmps],
@@ -446,11 +435,13 @@ function TestExplorer({
 
           {shown.length > 0 ? (
             <SeriesChart
-              labels={labels}
+              key={test.id}
+              x={elapsed}
               series={shown}
               ariaLabel={`${test.name}: ${shown.map((entry) => entry.label).join(", ")} no tempo`}
+              formatX={formatElapsed}
+              xSteps={ELAPSED_TICK_STEPS}
               independentScales
-              showScales
               legend={false}
             />
           ) : (
@@ -460,9 +451,9 @@ function TestExplorer({
           )}
 
           <p className="nt-explorer__foot">
-            Tempo em minutos desde o início do log. Cada unidade tem seu eixo, na cor da série. RPM
-            e energia saem da conta da planilha. Bolinha é leitura do alicate. Arraste no gráfico
-            para dar zoom num trecho.
+            Tempo desde o início do log. Cada unidade tem seu eixo, na cor da série. RPM e energia
+            saem da conta da planilha. Bolinha é leitura do alicate. Arraste no gráfico para dar
+            zoom num trecho.
           </p>
         </div>
       </Card>
@@ -475,6 +466,8 @@ function TestExplorer({
 }
 
 const STICK_AXIS = Array.from({ length: 101 }, (_, pct) => pct);
+const STICK_TICK_STEPS = [10] as const;
+const formatStick = (pct: number) => `${pct} %`;
 
 /** Measured points of each test placed on a 0–100 % stick axis by the stick actually held. */
 function curveSeries(
@@ -749,9 +742,10 @@ export default function EnergyPage() {
                 <Card heading="Corrente da arma (A)" bodyPadding={false}>
                   <div style={{ padding: 18 }}>
                     <SeriesChart
-                      labels={STICK_AXIS.map((pct) => `${pct} %`)}
+                      x={STICK_AXIS}
+                      formatX={formatStick}
+                      xSteps={STICK_TICK_STEPS}
                       series={currentCurves}
-                      xTickEvery={10}
                       xTitle="stick segurado (%)"
                       ariaLabel="Corrente da arma por porcentagem de stick nos dois testes, com a média que cabe na luta"
                     />
@@ -760,9 +754,10 @@ export default function EnergyPage() {
                 <Card heading="Energia armazenada (J)" bodyPadding={false}>
                   <div style={{ padding: 18 }}>
                     <SeriesChart
-                      labels={STICK_AXIS.map((pct) => `${pct} %`)}
+                      x={STICK_AXIS}
+                      formatX={formatStick}
+                      xSteps={STICK_TICK_STEPS}
                       series={energyCurves}
-                      xTickEvery={10}
                       xTitle="stick segurado (%)"
                       ariaLabel="Energia da arma por porcentagem de stick nos dois testes, pela RPM da planilha"
                     />

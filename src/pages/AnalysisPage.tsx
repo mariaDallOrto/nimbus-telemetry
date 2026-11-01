@@ -1,91 +1,56 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-  type DragEvent,
-} from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { MotorParams } from "../components/MotorParams";
-import { NumberInput } from "../components/NumberInput";
 import { Section } from "../components/Section";
-import { MiniChart } from "../charts/MiniChart";
-import { SeriesChart, type ChartSeries } from "../charts/SeriesChart";
-import {
-  CHART_COLOR_CLAMP,
-  CHART_COLOR_CURRENT,
-  CHART_COLOR_RPM,
-  CHART_COLOR_RSSI,
-  CHART_COLOR_STICK,
-  CHART_COLOR_VOLTAGE,
-  seriesColor,
-} from "../charts/chartColors";
+import { currentColumn, defaultLogSignals, logSignals, RPM_COLUMN } from "../charts/logSignals";
+import { ELAPSED_TICK_STEPS, formatElapsed } from "../charts/plotOptions";
+import { SignalExplorer, useSignalSelection } from "../charts/SignalExplorer";
 import {
   CsvParseError,
+  elapsedSeconds,
   numericColumn,
   parseCsv,
-  temporalLabels,
   type CsvValue,
   type ParsedCsv,
 } from "../telemetry/csv";
-import { movingAverage } from "../telemetry/movingAverage";
+import { generateMockLog } from "../telemetry/mockLog";
 import { estimateRpm } from "../telemetry/rpm";
 import { useTelemetry } from "../telemetry/TelemetryContext";
 import { intOrDash } from "../ui/format";
 
 const ROW_LIMIT = 200;
-/** Derived (not logged) column: RPM estimated from voltage, stick and current. */
-const RPM_COLUMN = "RPM_Est";
-/** Manual clamp-meter readings; sparse, filled only on rows where a reading was taken. */
-const CLAMP_COLUMN = "Alicate_A";
-/** Current columns share one Y axis so the clamp readings line up with the sensor. */
-const CURRENT_COLUMNS = new Set([
-  "Corrente_A",
-  "Corrente_Med_A",
-  "Corrente_Min_A",
-  CLAMP_COLUMN,
-]);
-const MEAN_CURRENT_COLUMN = "Corrente_Med_A";
-const RAW_CURRENT_COLUMN = "Corrente_A";
-
-/** The mean current is the reliable reading; the others are noisy. Older logs only have the raw one. */
-function currentColumn(headers: readonly string[]): string {
-  return headers.includes(MEAN_CURRENT_COLUMN)
-    ? MEAN_CURRENT_COLUMN
-    : RAW_CURRENT_COLUMN;
-}
-
-const CURRENT_ALIAS = "@current";
-
-function resolveColumn(key: string, headers: readonly string[]): string {
-  return key === CURRENT_ALIAS ? currentColumn(headers) : key;
-}
-
 function rpmSourceColumns(headers: readonly string[]): string[] {
   return ["TensaoTotal_V", "Comando_Pct", currentColumn(headers)];
 }
 
-const DEFAULT_SELECTED = [
-  CURRENT_ALIAS,
-  "TensaoTotal_V",
-  "Comando_Pct",
-  "RSSI_dBm",
-  RPM_COLUMN,
-  CLAMP_COLUMN,
-];
-const EXCLUDED_COLUMNS = new Set(["Timestamp", "PacketID"]);
-
 type ExampleLog = {
   id: string;
-  file: string;
+  /** Generated in the browser instead of fetched from /public/examples. */
+  file: string | { generate: () => string };
   name: string;
   description: string;
 };
 
 /** Sample logs bundled in /public/examples, grouped by section and sorted oldest first. */
 const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
+  ...(import.meta.env.DEV
+    ? [
+        {
+          title: "Dados simulados",
+          logs: [
+            {
+              id: "simulado",
+              file: { generate: generateMockLog },
+              name: "Log simulado",
+              description:
+                "2 min falsos: rampa, socos, queda de bateria, RSSI ruim, perda de pacotes e alicate.",
+            },
+          ],
+        },
+      ]
+    : []),
   {
     title: "Anteriores",
     logs: [
@@ -122,15 +87,13 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
         id: "bateria-acabando",
         file: "2026-10-24/14h23.csv",
         name: "Bateria acabando",
-        description:
-          "Gravado às 14h23 com a bateria já descarregada (~15,5 V em repouso).",
+        description: "Gravado às 14h23 com a bateria já descarregada (~15,5 V em repouso).",
       },
       {
         id: "bateria-prime",
         file: "2026-10-24/14h38.csv",
         name: "Bateria prime",
-        description:
-          "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
+        description: "Gravado às 14h38 com a bateria cheia (~16,7 V em repouso).",
       },
     ],
   },
@@ -141,15 +104,13 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
         id: "t-motor-normal-serial",
         file: "2026-10-31/normal-serial.csv",
         name: "Normal",
-        description:
-          "Log completo do teste normal, 1m40s sem perda de pacotes (média até 17 A).",
+        description: "Log completo do teste normal, 1m40s sem perda de pacotes (média até 17 A).",
       },
       {
         id: "t-motor-pico-luta-serial",
         file: "2026-10-31/pico-luta-serial.csv",
         name: "Pico de luta",
-        description:
-          "Log completo do pico de luta, 1 min sem perda de pacotes (média até 32 A).",
+        description: "Log completo do pico de luta, 1 min sem perda de pacotes (média até 32 A).",
       },
     ],
   },
@@ -158,32 +119,11 @@ const EXAMPLE_SECTIONS: { title: string; logs: ExampleLog[] }[] = [
 const EXAMPLE_LOGS = EXAMPLE_SECTIONS.flatMap((section) => section.logs);
 const EXAMPLE_QUERY_PARAM = "log";
 
-const COLUMN_COLORS: Record<string, string> = {
-  [RAW_CURRENT_COLUMN]: CHART_COLOR_CURRENT,
-  [MEAN_CURRENT_COLUMN]: CHART_COLOR_CURRENT,
-  [CLAMP_COLUMN]: CHART_COLOR_CLAMP,
-  TensaoTotal_V: CHART_COLOR_VOLTAGE,
-  Comando_Pct: CHART_COLOR_STICK,
-  RSSI_dBm: CHART_COLOR_RSSI,
-  [RPM_COLUMN]: CHART_COLOR_RPM,
-};
-
-const OVERVIEW_CHARTS = [
-  { key: CURRENT_ALIAS, label: "Corrente (A)", color: CHART_COLOR_CURRENT },
-  { key: "TensaoTotal_V", label: "Tensão (V)", color: CHART_COLOR_VOLTAGE },
-  { key: "Comando_Pct", label: "Stick (%)", color: CHART_COLOR_STICK },
-  { key: RPM_COLUMN, label: "RPM Est.", color: CHART_COLOR_RPM },
-  { key: "RSSI_dBm", label: "RSSI (dBm)", color: CHART_COLOR_RSSI },
-] as const;
-
-function isPlottable(header: string): boolean {
-  return (
-    !EXCLUDED_COLUMNS.has(header) && !header.toLowerCase().includes("time")
-  );
-}
-
-function columnColor(header: string, index: number): string {
-  return COLUMN_COLORS[header] ?? seriesColor(index);
+async function exampleText(example: ExampleLog, signal: AbortSignal): Promise<string> {
+  if (typeof example.file !== "string") return example.file.generate();
+  const response = await fetch(`${import.meta.env.BASE_URL}examples/${example.file}`, { signal });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
 }
 
 function numCell(value: CsvValue | undefined): number | null {
@@ -194,6 +134,8 @@ type LoadedFile = {
   name: string;
   parsed: ParsedCsv;
   exampleId?: string | undefined;
+  /** Remounts the chart on every load, even for a file with the same name. */
+  loadedAt: number;
 };
 
 export default function AnalysisPage() {
@@ -203,118 +145,63 @@ export default function AnalysisPage() {
   const [file, setFile] = useState<LoadedFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [maByColumn, setMaByColumn] = useState<Record<string, number>>({});
+  const selection = useSignalSelection([]);
   const [independentScales, setIndependentScales] = useState(true);
   const [loadingExample, setLoadingExample] = useState<string | null>(null);
 
   // Estimated RPM per row, recomputed whenever the motor params change. When
   // the source columns are present we expose RPM_Est as a virtual column that
-  // the chart, overview, smoothing and table all treat like a logged one.
+  // the chart and table treat like a logged one.
   const model = useMemo(() => {
     if (!file) return null;
     const sourceColumns = rpmSourceColumns(file.parsed.headers);
-    const hasRpm = sourceColumns.every((column) =>
-      file.parsed.headers.includes(column),
-    );
+    const hasRpm = sourceColumns.every((column) => file.parsed.headers.includes(column));
     const rpm: (number | null)[] = file.parsed.rows.map((row) => {
       const voltage = numCell(row["TensaoTotal_V"]);
       const stickPct = numCell(row["Comando_Pct"]);
       const current = numCell(row[currentColumn(file.parsed.headers)]);
-      if (voltage === null || stickPct === null || current === null)
-        return null;
+      if (voltage === null || stickPct === null || current === null) return null;
       return estimateRpm({ voltage, stickPct, current }, config);
     });
-    const headers = hasRpm
-      ? [...file.parsed.headers, RPM_COLUMN]
-      : file.parsed.headers;
+    const headers = hasRpm ? [...file.parsed.headers, RPM_COLUMN] : file.parsed.headers;
     return { headers, rpm, hasRpm };
   }, [file, config]);
 
-  const plottableColumns = useMemo(
-    () => (model ? model.headers.filter(isPlottable) : []),
-    [model],
-  );
+  const elapsed = useMemo(() => (file ? elapsedSeconds(file.parsed.rows) : []), [file]);
 
-  const labels = useMemo(
-    () => (file ? temporalLabels(file.parsed.rows) : []),
-    [file],
-  );
-
-  const columnSeries = (header: string): (number | null)[] => {
-    if (!file) return [];
-    if (header === RPM_COLUMN) return model?.rpm ?? [];
-    return numericColumn(file.parsed.rows, header);
-  };
-
-  const customSeries = useMemo<ChartSeries[]>(() => {
+  const signals = useMemo(() => {
     if (!file || !model) return [];
-    return plottableColumns
-      .filter((header) => selected.has(header))
-      .map((header, index) => {
-        const window = maByColumn[header] ?? 1;
-        const raw =
-          header === RPM_COLUMN
-            ? model.rpm
-            : numericColumn(file.parsed.rows, header);
-        return {
-          label: window > 1 ? `${header} (MM${window})` : header,
-          data: movingAverage(raw, window),
-          color: columnColor(header, index),
-          markers: header === CLAMP_COLUMN,
-          ...(CURRENT_COLUMNS.has(header) ? { scaleGroup: "current" } : {}),
-        };
-      });
-  }, [file, model, plottableColumns, selected, maByColumn]);
+    return logSignals(model.headers, (header) =>
+      header === RPM_COLUMN ? model.rpm : numericColumn(file.parsed.rows, header),
+    );
+  }, [file, model]);
 
-  const loadCsvText = (
-    name: string,
-    text: string,
-    loadedExampleId?: string,
-  ) => {
+  const defaultSignals = useMemo(() => defaultLogSignals(file?.parsed.headers ?? []), [file]);
+
+  const loadCsvText = (name: string, text: string, loadedExampleId?: string) => {
     try {
       const parsed = parseCsv(text);
-      const hasRpm = rpmSourceColumns(parsed.headers).every((column) =>
-        parsed.headers.includes(column),
-      );
-      setFile({ name, parsed, exampleId: loadedExampleId });
+      setFile({ name, parsed, exampleId: loadedExampleId, loadedAt: performance.now() });
       setError(null);
-      setSelected(
-        new Set(
-          DEFAULT_SELECTED.map((column) =>
-            resolveColumn(column, parsed.headers),
-          ).filter((column) =>
-            column === RPM_COLUMN ? hasRpm : parsed.headers.includes(column),
-          ),
-        ),
-      );
-      setMaByColumn({});
+      selection.reset(defaultLogSignals(parsed.headers));
     } catch (caught) {
       setFile(null);
-      setError(
-        caught instanceof CsvParseError
-          ? caught.message
-          : "Falha ao ler o arquivo.",
-      );
+      setError(caught instanceof CsvParseError ? caught.message : "Falha ao ler o arquivo.");
     }
   };
 
   const readFile = (selectedFile: File | undefined) => {
     if (!selectedFile) return;
     const reader = new FileReader();
-    reader.onload = (event) =>
-      loadCsvText(selectedFile.name, String(event.target?.result ?? ""));
+    reader.onload = (event) => loadCsvText(selectedFile.name, String(event.target?.result ?? ""));
     reader.onerror = () => setError("Não foi possível ler o arquivo.");
     reader.readAsText(selectedFile);
   };
 
-  const handleInput = (event: ChangeEvent<HTMLInputElement>) =>
-    readFile(event.target.files?.[0]);
+  const handleInput = (event: ChangeEvent<HTMLInputElement>) => readFile(event.target.files?.[0]);
 
   useEffect(() => {
-    const example = EXAMPLE_LOGS.find(
-      (candidate) => candidate.id === exampleId,
-    );
+    const example = EXAMPLE_LOGS.find((candidate) => candidate.id === exampleId);
     if (!example) {
       setFile((current) => (current?.exampleId ? null : current));
       return;
@@ -322,13 +209,7 @@ export default function AnalysisPage() {
     const controller = new AbortController();
     setError(null);
     setLoadingExample(example.id);
-    fetch(`${import.meta.env.BASE_URL}examples/${example.file}`, {
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.text();
-      })
+    exampleText(example, controller.signal)
       .then((text) => loadCsvText(example.name, text, example.id))
       .catch((caught) => {
         if (controller.signal.aborted) return;
@@ -355,29 +236,8 @@ export default function AnalysisPage() {
     readFile(event.dataTransfer.files?.[0]);
   };
 
-  const toggleColumn = (header: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(header)) next.delete(header);
-      else next.add(header);
-      return next;
-    });
-  };
-
-  const setColumnMa = (header: string, value: number) => {
-    setMaByColumn((prev) => ({ ...prev, [header]: Math.max(1, value || 1) }));
-  };
-
   const rowCount = file?.parsed.rows.length ?? 0;
   const shownRows = Math.min(rowCount, ROW_LIMIT);
-  const overviewCharts = OVERVIEW_CHARTS.map((chart) => ({
-    ...chart,
-    column: resolveColumn(chart.key, file?.parsed.headers ?? []),
-  })).filter((chart) =>
-    chart.column === RPM_COLUMN
-      ? model?.hasRpm
-      : file?.parsed.headers.includes(chart.column),
-  );
 
   return (
     <main className="nb-main">
@@ -390,8 +250,8 @@ export default function AnalysisPage() {
             </div>
             <h1 className="nb-hero__title">Análise de CSV</h1>
             <p className="nb-hero__lede">
-              Carregue um log gravado no cartão SD do ESP32 para montar gráficos
-              personalizados, suavizar séries e inspecionar os dados brutos.
+              Carregue um log gravado no cartão SD do ESP32 para ver corrente, stick e tensão,
+              escolher outros sinais e inspecionar os dados brutos.
             </p>
           </div>
         </header>
@@ -400,17 +260,10 @@ export default function AnalysisPage() {
           <Card
             action={
               <div className="nt-file-actions">
-                <button
-                  type="button"
-                  className="nb-btn nb-btn--secondary"
-                  onClick={backToStart}
-                >
+                <button type="button" className="nb-btn nb-btn--secondary" onClick={backToStart}>
                   ← Voltar
                 </button>
-                <label
-                  className="nb-btn nb-btn--secondary"
-                  style={{ cursor: "pointer" }}
-                >
+                <label className="nb-btn nb-btn--secondary" style={{ cursor: "pointer" }}>
                   Trocar arquivo
                   <input
                     type="file"
@@ -459,12 +312,9 @@ export default function AnalysisPage() {
               <span className="nt-dropzone__icon" aria-hidden>
                 📂
               </span>
-              <span className="nt-dropzone__title">
-                Carregar arquivo de log (.csv)
-              </span>
+              <span className="nt-dropzone__title">Carregar arquivo de log (.csv)</span>
               <span className="nt-dropzone__hint">
-                Arraste o arquivo baixado do ESP32 aqui, ou clique para
-                selecionar.
+                Arraste o arquivo baixado do ESP32 aqui, ou clique para selecionar.
               </span>
             </label>
 
@@ -472,9 +322,7 @@ export default function AnalysisPage() {
               <div className="nt-examples__title">Ou comece com um exemplo</div>
               {EXAMPLE_SECTIONS.map((section) => (
                 <section key={section.title} className="nt-examples__section">
-                  <h3 className="nt-examples__section-title">
-                    {section.title}
-                  </h3>
+                  <h3 className="nt-examples__section-title">{section.title}</h3>
                   <div className="nt-examples__grid">
                     {section.logs.map((example) => (
                       <button
@@ -486,13 +334,9 @@ export default function AnalysisPage() {
                         onClick={() => openExample(example)}
                       >
                         <span className="nt-example__name">{example.name}</span>
-                        <span className="nt-example__desc">
-                          {example.description}
-                        </span>
+                        <span className="nt-example__desc">{example.description}</span>
                         <span className="nt-example__cta" aria-hidden>
-                          {loadingExample === example.id
-                            ? "Carregando…"
-                            : "Abrir exemplo →"}
+                          {loadingExample === example.id ? "Carregando…" : "Abrir exemplo →"}
                         </span>
                       </button>
                     ))}
@@ -506,33 +350,10 @@ export default function AnalysisPage() {
         {file ? (
           <>
             <Section
-              title="Parâmetros do motor"
-              eyebrow="RPM estimado"
-              subtitle="KV, resistência e redução alimentam a coluna RPM_Est — ajuste para estimar o RPM correto."
-            >
-              <Card>
-                <MotorParams />
-              </Card>
-              {model && !model.hasRpm ? (
-                <div style={{ marginTop: 14 }}>
-                  <Alert variant="info">
-                    RPM não calculado: o log não tem as colunas{" "}
-                    {rpmSourceColumns(file?.parsed.headers ?? []).join(", ")}.
-                  </Alert>
-                </div>
-              ) : null}
-            </Section>
-
-            <Section
-              title="Gráfico personalizado"
-              eyebrow="Selecione as colunas"
-              subtitle="As linhas marcadas aparecem no gráfico. A suavização é controlada por coluna abaixo."
+              title="Sinais"
+              eyebrow="Gráfico"
               action={
-                <div
-                  className="nt-segmented"
-                  role="group"
-                  aria-label="Escala dos eixos"
-                >
+                <div className="nt-segmented" role="group" aria-label="Escala dos eixos">
                   <button
                     type="button"
                     className={`nt-segmented__option${independentScales ? " is-active" : ""}`}
@@ -554,103 +375,37 @@ export default function AnalysisPage() {
                 </div>
               }
             >
-              <div style={{ marginBottom: 18 }}>
-                <div className="nt-toggle-grid">
-                  {plottableColumns.map((header) => {
-                    const on = selected.has(header);
-                    return (
-                      <button
-                        key={header}
-                        type="button"
-                        className={`nt-toggle${on ? " is-on" : ""}`}
-                        aria-pressed={on}
-                        onClick={() => toggleColumn(header)}
-                      >
-                        <span className="nt-toggle__dot" aria-hidden />
-                        {header}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <Card bodyPadding={false}>
-                <div style={{ padding: 18 }}>
-                  {customSeries.length > 0 ? (
-                    <SeriesChart
-                      labels={labels}
-                      series={customSeries}
-                      ariaLabel="Gráfico personalizado"
-                      independentScales={independentScales}
-                    />
-                  ) : (
-                    <div className="nt-empty">
-                      <span className="nt-empty__icon" aria-hidden>
-                        📊
-                      </span>
-                      <span className="nt-empty__title">
-                        Nenhuma coluna selecionada
-                      </span>
-                      <span className="nt-empty__hint">
-                        Marque ao menos uma coluna acima para montar o gráfico.
-                      </span>
-                    </div>
-                  )}
-                </div>
+              <Card>
+                <SignalExplorer
+                  key={file.loadedAt}
+                  x={elapsed}
+                  signals={signals}
+                  selection={selection}
+                  defaults={defaultSignals}
+                  ariaLabel={`Sinais selecionados do log ${file.name}`}
+                  formatX={formatElapsed}
+                  xSteps={ELAPSED_TICK_STEPS}
+                  sharedScale={!independentScales}
+                />
               </Card>
             </Section>
 
             <Section
-              title="Média móvel por linha"
-              eyebrow="Suavização"
-              subtitle="Janela em pontos — 1 mantém o sinal original."
+              title="Parâmetros do motor"
+              eyebrow="RPM estimado"
+              subtitle="KV, resistência e redução alimentam o sinal RPM estimado. Ajuste para estimar o RPM correto."
             >
-              <div className="nt-ma-list">
-                {plottableColumns.map((header) => {
-                  const window = maByColumn[header] ?? 1;
-                  return (
-                    <div key={header} className="nt-ma-row">
-                      <span className="nt-ma-row__name">{header}</span>
-                      <div className="nt-ma-row__controls">
-                        <input
-                          type="range"
-                          min={1}
-                          max={50}
-                          value={Math.min(window, 50)}
-                          aria-label={`Média móvel de ${header}`}
-                          onChange={(event) =>
-                            setColumnMa(
-                              header,
-                              Number.parseInt(event.target.value, 10),
-                            )
-                          }
-                        />
-                        <NumberInput
-                          value={window}
-                          min={1}
-                          max={200}
-                          aria-label={`Janela da média móvel de ${header}`}
-                          onValueChange={(next) => setColumnMa(header, next)}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </Section>
-
-            <Section title="Visão geral dos sensores" eyebrow="Resumo">
-              <div className="nt-overview">
-                {overviewCharts.map((chart) => (
-                  <Card key={chart.key} heading={chart.label}>
-                    <MiniChart
-                      labels={labels}
-                      data={columnSeries(chart.column)}
-                      color={chart.color}
-                      label={chart.label}
-                    />
-                  </Card>
-                ))}
-              </div>
+              <Card>
+                <MotorParams />
+              </Card>
+              {model && !model.hasRpm ? (
+                <div style={{ marginTop: 14 }}>
+                  <Alert variant="info">
+                    RPM não calculado: o log não tem as colunas{" "}
+                    {rpmSourceColumns(file?.parsed.headers ?? []).join(", ")}.
+                  </Alert>
+                </div>
+              ) : null}
             </Section>
 
             <Section
@@ -673,23 +428,17 @@ export default function AnalysisPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {file.parsed.rows
-                        .slice(0, ROW_LIMIT)
-                        .map((row, index) => (
-                          <tr
-                            key={String(
-                              row["PacketID"] ?? Object.values(row).join("|"),
-                            )}
-                          >
-                            {model?.headers.map((header) => (
-                              <td key={header}>
-                                {header === RPM_COLUMN
-                                  ? intOrDash(model.rpm[index] ?? null)
-                                  : String(row[header] ?? "")}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
+                      {file.parsed.rows.slice(0, ROW_LIMIT).map((row, index) => (
+                        <tr key={String(row["PacketID"] ?? Object.values(row).join("|"))}>
+                          {model?.headers.map((header) => (
+                            <td key={header}>
+                              {header === RPM_COLUMN
+                                ? intOrDash(model.rpm[index] ?? null)
+                                : String(row[header] ?? "")}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>

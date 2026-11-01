@@ -3,7 +3,7 @@ import {
   CsvParseError,
   numericColumn,
   parseCsv,
-  temporalLabels,
+  elapsedSeconds,
   timeLabels,
 } from "../src/telemetry/csv";
 
@@ -55,26 +55,37 @@ describe("timeLabels", () => {
   });
 });
 
-describe("temporalLabels", () => {
-  test("keeps whole-second labels when each second has one sample", () => {
-    const parsed = parseCsv(SAMPLE);
-    expect(temporalLabels(parsed.rows)).toEqual(["14:00:00", "14:00:01"]);
+describe("elapsedSeconds", () => {
+  const rowsAt = (...times: string[]) =>
+    parseCsv(["Timestamp,Corrente_A", ...times.map((time) => `${time},1`)].join("\n")).rows;
+
+  test("counts seconds from the first row", () => {
+    expect(elapsedSeconds(parseCsv(SAMPLE).rows)).toEqual([0, 1]);
   });
 
-  test("spreads samples sharing a second across sub-second offsets", () => {
-    const text = [
-      "Timestamp,Corrente_A",
-      "2023-10-10T14_00_00,1",
-      "2023-10-10T14_00_00,2",
-      "2023-10-10T14_00_00,3",
-      "2023-10-10T14_00_00,4",
-    ].join("\n");
-    const parsed = parseCsv(text);
-    expect(temporalLabels(parsed.rows)).toEqual([
-      "14:00:00.000",
-      "14:00:00.250",
-      "14:00:00.500",
-      "14:00:00.750",
-    ]);
+  test("spreads samples sharing a second across that second", () => {
+    const rows = rowsAt(...Array.from({ length: 4 }, () => "2023-10-10T14_00_00"));
+    expect(elapsedSeconds(rows)).toEqual([0, 0.25, 0.5, 0.75]);
+  });
+
+  test("keeps gaps left by lost packets", () => {
+    expect(elapsedSeconds(rowsAt("2023-10-10T14_00_00", "2023-10-10T14_00_09"))).toEqual([0, 9]);
+  });
+
+  test("keeps counting across midnight", () => {
+    expect(elapsedSeconds(rowsAt("2023-10-10T23_59_59", "2023-10-11T00_00_01"))).toEqual([0, 2]);
+  });
+
+  test("stays strictly ascending when the clock steps back", () => {
+    const elapsed = elapsedSeconds(
+      rowsAt("2023-10-10T14_00_05", "2023-10-10T14_00_06", "2023-10-10T14_00_05"),
+    );
+    expect(elapsed.every((value, index) => index === 0 || value > (elapsed[index - 1] ?? 0))).toBe(
+      true,
+    );
+  });
+
+  test("falls back to the row index without readable timestamps", () => {
+    expect(elapsedSeconds(rowsAt("sem-hora", "sem-hora"))).toEqual([0, 1]);
   });
 });

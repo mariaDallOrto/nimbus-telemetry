@@ -1,29 +1,36 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert } from "../components/Alert";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { ConnectionStatusBadge } from "../components/ConnectionStatusBadge";
 import { Field } from "../components/Field";
 import { MetricRow, MetricTile } from "../components/MetricTile";
-import { MotorParams } from "../components/MotorParams";
 import { NumberInput } from "../components/NumberInput";
 import { Section } from "../components/Section";
-import { ComboChart } from "../charts/ComboChart";
 import {
   CHART_COLOR_CURRENT,
-  CHART_COLOR_RPM,
+  CHART_COLOR_CURRENT_MIN,
+  CHART_COLOR_CURRENT_PEAK,
   CHART_COLOR_RSSI,
   CHART_COLOR_STICK,
   CHART_COLOR_VOLTAGE,
 } from "../charts/chartColors";
-import { stickyBounds, type AxisBounds } from "../telemetry/axis";
+import { formatClock, SECOND_TICK_STEPS } from "../charts/plotOptions";
+import { SignalExplorer, useSignalSelection, type Signal } from "../charts/SignalExplorer";
 import { movingAverage } from "../telemetry/movingAverage";
 import { isSerialSupported } from "../telemetry/serialLink";
 import { useTelemetry } from "../telemetry/TelemetryContext";
 import type { ConnectionStatus } from "../telemetry/types";
-import { fixedOrDash, intOrDash, lastNumber, tail } from "../ui/format";
+import { fixedOrDash, intOrDash, lastNumber } from "../ui/format";
 
 const SD_ERROR_MARKER = "ERRO_SD";
+
+const LIVE_DEFAULTS = [
+  { id: "current", movingAverage: 20 },
+  { id: "stick", movingAverage: 5 },
+  { id: "voltage", movingAverage: 15 },
+];
+const CURRENT_LOOK = { group: "Corrente", unit: "A", scaleGroup: "current", digits: 1 } as const;
 
 const SERIAL_PORT_STATE: Record<ConnectionStatus, string> = {
   offline: "Ligue o ESP32 no USB e escolha a porta",
@@ -70,14 +77,10 @@ export default function LivePage() {
     calibratedAt,
   } = useTelemetry();
 
-  const [maStick, setMaStick] = useState(1);
-  const [maCurrent, setMaCurrent] = useState(1);
-  const [maRpm, setMaRpm] = useState(1);
+  const selection = useSignalSelection(LIVE_DEFAULTS);
   const [visibleWindow, setVisibleWindow] = useState(80);
+  const [isPaused, setIsPaused] = useState(false);
   const [isConfirmingCalibration, setIsConfirmingCalibration] = useState(false);
-
-  const currentBoundsRef = useRef<AxisBounds | null>(null);
-  const rpmBoundsRef = useRef<AxisBounds | null>(null);
 
   const isWifiOnline = status === "online";
   const isSerialOnline = serialStatus === "online";
@@ -93,29 +96,72 @@ export default function LivePage() {
       ? recording.file
       : null;
 
-  // Derived chart series: slice to the visible window, then smooth each line.
-  // Sticky axis bounds are kept in refs so they grow on demand and only shrink
-  // with hysteresis (calm axes under noise). sampleVersion drives recompute.
-  const chart = useMemo(() => {
-    const labels = tail(buffers.labels, visibleWindow);
-    const stick = movingAverage(tail(buffers.stick, visibleWindow), maStick);
-    const current = movingAverage(tail(buffers.current, visibleWindow), maCurrent);
-    const currentPeak = tail(buffers.currentPeak, visibleWindow);
-    const rpm = movingAverage(tail(buffers.rpm, visibleWindow), maRpm);
-    currentBoundsRef.current = stickyBounds(currentBoundsRef.current, current);
-    rpmBoundsRef.current = stickyBounds(rpmBoundsRef.current, rpm);
-    return {
-      labels,
-      stick,
-      current,
-      currentPeak,
-      rpm,
-      lastStick: lastNumber(stick),
-      lastCurrent: lastNumber(current),
-      lastRpm: lastNumber(rpm),
-    };
-    // buffers mutate in place; sampleVersion is the change signal that drives recompute
-  }, [sampleVersion, visibleWindow, maStick, maCurrent, maRpm, buffers]);
+  // Buffers mutate in place, so each frame copies them. While paused the memo
+  // keeps the last copy, which leaves a still chart to zoom and inspect.
+  const frameKey = isPaused ? null : sampleVersion;
+  const live = useMemo(() => {
+    const signals: Signal[] = [
+      {
+        ...CURRENT_LOOK,
+        id: "current",
+        label: "Corrente média",
+        color: CHART_COLOR_CURRENT,
+        data: [...buffers.current],
+      },
+      {
+        ...CURRENT_LOOK,
+        id: "currentPeak",
+        label: "Corrente pico",
+        color: CHART_COLOR_CURRENT_PEAK,
+        data: [...buffers.currentPeak],
+      },
+      {
+        ...CURRENT_LOOK,
+        id: "currentMin",
+        label: "Corrente mínima",
+        color: CHART_COLOR_CURRENT_MIN,
+        data: [...buffers.currentMin],
+      },
+      {
+        id: "stick",
+        label: "Stick",
+        group: "Comando",
+        unit: "%",
+        scaleGroup: "stick",
+        digits: 0,
+        range: [0, 100],
+        color: CHART_COLOR_STICK,
+        data: [...buffers.stick],
+      },
+      {
+        id: "voltage",
+        label: "Tensão total",
+        group: "Bateria",
+        unit: "V",
+        scaleGroup: "voltage",
+        digits: 2,
+        color: CHART_COLOR_VOLTAGE,
+        data: [...buffers.voltage],
+      },
+      {
+        id: "rssi",
+        label: "RSSI",
+        group: "Rádio",
+        unit: "dBm",
+        scaleGroup: "rssi",
+        digits: 0,
+        color: CHART_COLOR_RSSI,
+        data: [...buffers.rssi],
+      },
+    ];
+    return { x: [...buffers.times], signals };
+  }, [frameKey, buffers]);
+
+  // Tiles read the buffers, not the copy above, so they stay live while the chart is paused.
+  const smoothedLast = (values: readonly number[], id: string) => {
+    const window = selection.windowOf(id);
+    return lastNumber(movingAverage(values.slice(-window), window));
+  };
 
   const handleConnect = () => {
     if (!ipValid) return;
@@ -144,8 +190,8 @@ export default function LivePage() {
             </div>
             <h1 className="nb-hero__title">Telemetria ao Vivo</h1>
             <p className="nb-hero__lede">
-              Acompanhe stick, corrente e RPM estimado em tempo real, grave logs pela serial e no
-              cartão SD ao mesmo tempo e ajuste o receptor.
+              Acompanhe corrente, stick e tensão em tempo real, grave logs pela serial e no cartão
+              SD ao mesmo tempo e ajuste o receptor.
             </p>
           </div>
           <div className="nb-hero__aside">
@@ -154,76 +200,67 @@ export default function LivePage() {
           </div>
         </header>
 
-        <div className="nb-grid">
-          <div className="nb-grid nb-grid--2">
-            <Card
-              heading="Conexão WiFi"
-              action={
-                isWifiOnline || isWifiConnecting ? (
-                  <Button variant="danger" onClick={disconnect}>
-                    Desconectar
-                  </Button>
-                ) : (
-                  <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
-                    Conectar
-                  </Button>
-                )
-              }
-            >
-              <div className="nt-connect">
-                <Field
-                  label="IP do ESP32"
-                  inputMode="decimal"
-                  placeholder="192.168.4.1"
-                  value={config.ip}
-                  invalid={config.ip.length > 0 && !ipValid}
-                  hint={
-                    config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
-                  }
-                  onChange={(event) => setConfig({ ip: event.target.value })}
-                />
-              </div>
-            </Card>
-
-            <Card
-              heading="Conexão serial"
-              action={
-                isSerialOnline || isSerialConnecting ? (
-                  <Button variant="danger" onClick={() => void disconnectSerial()}>
-                    Desconectar
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    onClick={handleSerialConnect}
-                    disabled={!isSerialSupported()}
-                  >
-                    Conectar
-                  </Button>
-                )
-              }
-            >
-              {isSerialSupported() ? (
-                <div className="nt-connect">
-                  <div className="nb-field">
-                    <span className="nb-field__label">Porta USB</span>
-                    <output className="nt-port-state">{SERIAL_PORT_STATE[serialStatus]}</output>
-                    <span className="nb-field__hint">Reconecta sozinho se o cabo cair</span>
-                  </div>
-                </div>
+        <div className="nb-grid nb-grid--2">
+          <Card
+            heading="Conexão WiFi"
+            action={
+              isWifiOnline || isWifiConnecting ? (
+                <Button variant="danger" onClick={disconnect}>
+                  Desconectar
+                </Button>
               ) : (
-                <Alert variant="warning">
-                  Este navegador não tem Web Serial. Use Chrome, Edge ou Chromium em localhost.
-                </Alert>
-              )}
-            </Card>
-          </div>
+                <Button variant="primary" onClick={handleConnect} disabled={!ipValid}>
+                  Conectar
+                </Button>
+              )
+            }
+          >
+            <div className="nt-connect">
+              <Field
+                label="IP do ESP32"
+                inputMode="decimal"
+                placeholder="192.168.4.1"
+                value={config.ip}
+                invalid={config.ip.length > 0 && !ipValid}
+                hint={
+                  config.ip.length > 0 && !ipValid ? "Endereço inválido" : "Access point do ESP32"
+                }
+                onChange={(event) => setConfig({ ip: event.target.value })}
+              />
+            </div>
+          </Card>
 
           <Card
-            heading="Parâmetros do motor"
-            action={<span className="nb-section__subtitle">Usados na estimativa de RPM</span>}
+            heading="Conexão serial"
+            action={
+              isSerialOnline || isSerialConnecting ? (
+                <Button variant="danger" onClick={() => void disconnectSerial()}>
+                  Desconectar
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  onClick={handleSerialConnect}
+                  disabled={!isSerialSupported()}
+                >
+                  Conectar
+                </Button>
+              )
+            }
           >
-            <MotorParams />
+            {isSerialSupported() ? (
+              <div className="nt-connect">
+                <div className="nb-field">
+                  <span className="nb-field__label">Porta USB</span>
+                  <output className="nt-port-state">{SERIAL_PORT_STATE[serialStatus]}</output>
+                  <span className="nb-field__hint">Reconecta sozinho se o cabo cair</span>
+                </div>
+              </div>
+            ) : (
+              <Alert variant="warning">
+                Este navegador não tem Web Serial. Use Chrome, Edge ou Chromium em localhost.
+              </Alert>
+            )}
           </Card>
         </div>
 
@@ -235,7 +272,6 @@ export default function LivePage() {
               unit="dBm"
               color={CHART_COLOR_RSSI}
             />
-            <MetricTile label="RPM Est." value={intOrDash(chart.lastRpm)} color={CHART_COLOR_RPM} />
             <MetricTile
               label="Tensão"
               value={fixedOrDash(lastSample?.voltage ?? null, 2)}
@@ -244,91 +280,57 @@ export default function LivePage() {
             />
             <MetricTile
               label="Stick"
-              value={intOrDash(chart.lastStick)}
+              value={intOrDash(smoothedLast(buffers.stick, "stick"))}
               unit="%"
               color={CHART_COLOR_STICK}
             />
             <MetricTile
               label="Corrente"
-              value={fixedOrDash(chart.lastCurrent, 1)}
+              value={fixedOrDash(smoothedLast(buffers.current, "current"), 1)}
               unit="A"
               color={CHART_COLOR_CURRENT}
             />
           </MetricRow>
         </Section>
 
-        <Section title="Sinais ao vivo" eyebrow="Stick · Corrente · RPM">
-          <Card bodyPadding={false}>
-            <div style={{ padding: "18px 18px 4px" }}>
-              <ComboChart
-                labels={chart.labels}
-                stick={chart.stick}
-                current={chart.current}
-                currentPeak={chart.currentPeak}
-                rpm={chart.rpm}
-                currentBounds={currentBoundsRef.current}
-                rpmBounds={rpmBoundsRef.current}
-              />
-            </div>
-            <div className="nt-toolbar">
-              <span className="nt-toolbar__label">Média móvel (pontos)</span>
-              <label className="nt-ma-field">
-                <span
-                  className="nt-ma-field__dot"
-                  style={{ background: CHART_COLOR_STICK }}
-                  aria-hidden
-                />
-                Stick
-                <NumberInput
-                  value={maStick}
-                  min={1}
-                  max={500}
-                  aria-label="Média móvel do stick"
-                  onValueChange={setMaStick}
-                />
-              </label>
-              <label className="nt-ma-field">
-                <span
-                  className="nt-ma-field__dot"
-                  style={{ background: CHART_COLOR_CURRENT }}
-                  aria-hidden
-                />
-                Corrente
-                <NumberInput
-                  value={maCurrent}
-                  min={1}
-                  max={500}
-                  aria-label="Média móvel da corrente"
-                  onValueChange={setMaCurrent}
-                />
-              </label>
-              <label className="nt-ma-field">
-                <span
-                  className="nt-ma-field__dot"
-                  style={{ background: CHART_COLOR_RPM }}
-                  aria-hidden
-                />
-                RPM
-                <NumberInput
-                  value={maRpm}
-                  min={1}
-                  max={500}
-                  aria-label="Média móvel do RPM"
-                  onValueChange={setMaRpm}
-                />
-              </label>
-              <span className="nt-toolbar__divider" aria-hidden />
-              <label className="nt-ma-field">
-                Janela visível
-                <NumberInput
-                  value={visibleWindow}
-                  min={10}
-                  max={2000}
-                  aria-label="Janela visível em pontos"
-                  onValueChange={setVisibleWindow}
-                />
-              </label>
-            </div>
+        <Section title="Sinais ao vivo" eyebrow="Corrente · Stick · Tensão">
+          <Card>
+            <SignalExplorer
+              x={live.x}
+              signals={live.signals}
+              selection={selection}
+              defaults={LIVE_DEFAULTS}
+              ariaLabel="Gráfico ao vivo dos sinais selecionados"
+              formatX={formatClock}
+              xSteps={SECOND_TICK_STEPS}
+              visiblePoints={visibleWindow}
+              live
+              follow={!isPaused}
+              onZoomChange={(isZoomed) => {
+                if (isZoomed) setIsPaused(true);
+              }}
+              controls={
+                <>
+                  <label className="nt-ma-field">
+                    Janela visível
+                    <NumberInput
+                      value={visibleWindow}
+                      min={10}
+                      max={2000}
+                      aria-label="Janela visível em pontos"
+                      onValueChange={setVisibleWindow}
+                    />
+                  </label>
+                  <Button
+                    variant="secondary"
+                    aria-pressed={isPaused}
+                    onClick={() => setIsPaused((paused) => !paused)}
+                  >
+                    {isPaused ? "▶ Voltar ao vivo" : "⏸ Pausar"}
+                  </Button>
+                </>
+              }
+            />
           </Card>
         </Section>
 

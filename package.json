@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "mock": "vite --open \"/nimbus-telemetry/analise?log=simulado\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview --port 4173",
     "test": "bun test",
@@ -16,12 +17,10 @@
     "verify": "tsc -b && oxlint && knip && bun test && oxfmt --check ."
   },
   "dependencies": {
-    "chart.js": "^4.5.0",
-    "chartjs-plugin-zoom": "^2.2.0",
     "react": "^19.2.0",
-    "react-chartjs-2": "^5.3.0",
     "react-dom": "^19.2.0",
-    "react-router-dom": "^7.7.0"
+    "react-router-dom": "^7.7.0",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.9.0",

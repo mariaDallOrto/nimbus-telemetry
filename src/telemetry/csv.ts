@@ -14,6 +14,9 @@ function cleanHeader(raw: string): string {
   return raw.trim().replace(/['"]+/g, "");
 }
 
+const SECONDS_PER_DAY = 86400;
+const MIN_ELAPSED_STEP_SECONDS = 0.001;
+
 export class CsvParseError extends Error {}
 
 export function parseCsv(text: string): ParsedCsv {
@@ -73,33 +76,41 @@ export function timeLabels(rows: readonly CsvRow[], timeHeader = "Timestamp"): s
   return rows.map((row, index) => baseSecond(row[timeHeader], index));
 }
 
-/**
- * Sub-second X-axis labels. The firmware timestamps at whole-second resolution
- * but logs several samples per second, so many rows share the same label and
- * the chart looks time-compressed. We recover temporal resolution by spreading
- * each run of equal-second rows evenly across that second
- * (`14:00:00.000 … 14:00:00.900`). Interpolation assumes a steady sample rate
- * within the second — which holds for this telemetry stream.
- */
-export function temporalLabels(rows: readonly CsvRow[], timeHeader = "Timestamp"): string[] {
-  const bases = rows.map((row, index) => baseSecond(row[timeHeader], index));
-  const labels: string[] = [];
+/** Clock of a row in seconds: `…T14_00_05` → 50405; null when the cell has no time. */
+function secondsOfDay(value: CsvValue | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const match = /(\d{2})[:_](\d{2})[:_](\d{2})/.exec(value);
+  if (!match) return null;
+  const [, hours = "0", minutes = "0", seconds = "0"] = match;
+  return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
 
+/**
+ * Seconds since the first row, strictly ascending. The firmware timestamps at
+ * whole-second resolution but logs several samples per second, so each run of
+ * equal-second rows is spread evenly across that second. Interpolation assumes
+ * a steady sample rate within the second, which holds for this stream. Rows
+ * without a readable time fall back to one second per row.
+ */
+export function elapsedSeconds(rows: readonly CsvRow[], timeHeader = "Timestamp"): number[] {
+  const clocks = rows.map((row) => secondsOfDay(row[timeHeader]));
+  if (clocks.some((clock) => clock === null)) return rows.map((_, index) => index);
+
+  const startClock = clocks[0] ?? 0;
+  const elapsed: number[] = [];
   let runStart = 0;
-  while (runStart < bases.length) {
+  while (runStart < clocks.length) {
     let runEnd = runStart;
-    while (runEnd < bases.length && bases[runEnd] === bases[runStart]) runEnd++;
-    const runLength = runEnd - runStart;
-    const base = bases[runStart] ?? String(runStart);
-    for (let offset = 0; offset < runLength; offset++) {
-      if (runLength > 1) {
-        const millis = Math.round((offset / runLength) * 1000);
-        labels.push(`${base}.${String(millis).padStart(3, "0")}`);
-      } else {
-        labels.push(base);
-      }
+    while (runEnd < clocks.length && clocks[runEnd] === clocks[runStart]) runEnd++;
+    const clock = clocks[runStart] ?? startClock;
+    const secondOfRun =
+      clock >= startClock ? clock - startClock : clock - startClock + SECONDS_PER_DAY;
+    for (let offset = 0; offset < runEnd - runStart; offset++) {
+      const previous = elapsed[elapsed.length - 1] ?? -MIN_ELAPSED_STEP_SECONDS;
+      const spread = secondOfRun + offset / (runEnd - runStart);
+      elapsed.push(Math.max(spread, previous + MIN_ELAPSED_STEP_SECONDS));
     }
     runStart = runEnd;
   }
-  return labels;
+  return elapsed;
 }

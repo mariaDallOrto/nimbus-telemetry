@@ -1,8 +1,10 @@
-// Hex literals for chart.js (canvas can't resolve CSS custom properties).
+// Hex literals for uPlot (canvas can't resolve CSS custom properties).
 // Each MUST stay 1:1 with its --color-* token in src/styles.css.
 
 export const CHART_COLOR_STICK = "#c7a6ff";
 export const CHART_COLOR_CURRENT = "#ff5c7c";
+export const CHART_COLOR_CURRENT_PEAK = "#ffa3b5";
+export const CHART_COLOR_CURRENT_MIN = "#c2455f";
 export const CHART_COLOR_CLAMP = "#ffe14d";
 export const CHART_COLOR_RPM = "#ff9f45";
 export const CHART_COLOR_VOLTAGE = "#34d399";
